@@ -21,7 +21,7 @@ def should_enter_approach(bearing_error, xtrack_error, wp_proportion, curr_alt, 
 
     return condition_1 or condition_2 or condition_3
 
-def should_enter_preflare(pf_arspd, current_alt, land_alt, sink_rate, pf_alt, pf_sec):
+def should_enter_preflare(pf_arspd, curr_alt, land_alt, sink_rate, pf_alt, pf_sec):
     height = current_alt - land_alt
 
     if pf_arspd <= 0:
@@ -41,13 +41,16 @@ def should_enter_preflare(pf_arspd, current_alt, land_alt, sink_rate, pf_alt, pf
     return condition_1 or condition_2
 
 def should_enter_flare(curr_alt, f_alt, f_sec, land_alt, sink_rate, wp_proportion):
+    height = curr_alt - land_alt
 
     condition_1 = (
-        curr_alt - land_alt <= f_alt
+        height <= f_alt
     )
 
     condition_2 = (
-        curr_alt - land_alt <= sink_rate * f_sec and
+        f_sec > 0.0 and
+        sink_rate > 0.0 and
+        height <= sink_rate * f_sec and
         wp_proportion > 0.5
     )
 

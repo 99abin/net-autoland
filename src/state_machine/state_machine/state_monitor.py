@@ -126,21 +126,19 @@ class state_machine(Node):
                 self.get_logger().info('APPROACH -> PREFLARE')
 
         elif self.curr_state in ('APPROACH', 'PREFLARE'):
-
-            enter_flare = should_enter_flare(self.curr_alt, self.f_alt, self.f_sec, self.land_alt, self.sink_rate, self.wp_proportion)
-
-            if enter_flare:
+            if should_enter_flare(
+                self.curr_alt, self.f_alt, self.f_sec,
+                self.land_alt, self.sink_rate, self.wp_proportion
+            ):
                 previous_state = self.curr_state
                 self.curr_state = 'FLARE'
-
-                self.get_logger().info(
-                    f'{previous_state} -> FLARE'
-                )
+                self.get_logger().info(f'{previous_state} -> FLARE')
 
             elif self.curr_state == 'APPROACH':
-                enter_preflare = should_enter_preflare(self.pf_arspd, self.curr_alt, self.land_alt, self.sink_rate, self.pf_alt, self.pf_sec)
-
-                if enter_preflare:
+                if should_enter_preflare(
+                    self.pf_arspd, self.curr_alt, self.land_alt,
+                    self.sink_rate, self.pf_alt, self.pf_sec
+                ):
                     self.curr_state = 'PREFLARE'
                     self.get_logger().info('APPROACH -> PREFLARE')
 
