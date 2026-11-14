@@ -1,0 +1,17 @@
+[1.188s] Invoking command in '/home/abin/td/autoland1/build/perception': PYTHONPATH=/home/abin/td/autoland1/build/perception/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/abin/td/autoland1/install/perception/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/abin/td/autoland1/build/perception/build --no-deps symlink_data
+[1.432s] running develop
+[1.587s] running egg_info
+[1.588s] writing perception.egg-info/PKG-INFO
+[1.588s] writing dependency_links to perception.egg-info/dependency_links.txt
+[1.588s] writing entry points to perception.egg-info/entry_points.txt
+[1.588s] writing requirements to perception.egg-info/requires.txt
+[1.588s] writing top-level names to perception.egg-info/top_level.txt
+[1.591s] reading manifest file 'perception.egg-info/SOURCES.txt'
+[1.592s] writing manifest file 'perception.egg-info/SOURCES.txt'
+[1.594s] running build_ext
+[1.594s] Creating /home/abin/td/autoland1/install/perception/lib/python3.10/site-packages/perception.egg-link (link to .)
+[1.596s] Installing detector script to /home/abin/td/autoland1/install/perception/lib/perception
+[1.596s] 
+[1.596s] Installed /home/abin/td/autoland1/build/perception
+[1.596s] running symlink_data
+[1.644s] Invoked command in '/home/abin/td/autoland1/build/perception' returned '0': PYTHONPATH=/home/abin/td/autoland1/build/perception/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/abin/td/autoland1/install/perception/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/abin/td/autoland1/build/perception/build --no-deps symlink_data

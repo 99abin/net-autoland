@@ -1,0 +1,4 @@
+[console_scripts]
+detector = perception.net_det:main
+processor = perception.net_pos:main
+
