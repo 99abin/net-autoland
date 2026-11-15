@@ -1,0 +1,11 @@
+parameter_manager:
+  ros__parameters:
+    # profile_path is supplied by the launch file's fc_profile argument.
+    parameter_write_enabled: false
+    apply_on_start: true
+    discover_landing_parameters: true
+    mavros_namespace: /mavros
+    service_timeout_s: 12.0
+    pull_timeout_s: 65.0
+    monitor_interval_s: 2.0
+    backup_directory: ~/.ros/autoland_parameter_backups

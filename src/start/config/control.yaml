@@ -1,0 +1,67 @@
+landing_supervisor:
+  ros__parameters:
+    handoff_enabled: false
+    mavros_namespace: /mavros
+    local_frame: map
+    body_frame: base_link
+    telemetry_timeout_s: 1.0
+    vision_timeout_s: 0.25
+    vision_stable_s: 0.5
+    min_vision_score: 0.5
+    max_position_std_m: 2.0
+    handoff_timeout_s: 3.0
+    # Native flare_alt/time are read from the verified FCU parameter profile.
+    handoff_margin_m: 1.5
+    handoff_margin_s: 0.5
+    max_cross_track_m: 5.0
+    max_track_error_deg: 15.0
+    min_net_range_m: 8.0
+    max_net_range_m: 80.0
+vision_controller:
+  ros__parameters:
+    mavros_namespace: /mavros
+    local_frame: map
+    body_frame: base_link
+    vision_timeout_s: 0.25
+    telemetry_timeout_s: 0.5
+    min_vision_score: 0.5
+    max_position_std_m: 2.0
+    # Experimental SITL starting values, NOT an aircraft-specific tune.
+    target_airspeed_mps: 15.0
+    minimum_airspeed_mps: 10.0
+    minimum_forward_speed_mps: 5.0
+    minimum_range_m: 2.5
+    maximum_range_m: 100.0
+    minimum_ttc_s: 0.2
+    lateral_gain: 2.0
+    vertical_gain: 0.7
+    roll_limit_deg: 20.0
+    pitch_min_deg: -8.0
+    pitch_max_deg: 12.0
+    roll_rate_deg_s: 20.0
+    pitch_rate_deg_s: 12.0
+    throttle_trim: 0.4
+    throttle_min: 0.15
+    throttle_max: 0.7
+    throttle_slew_s: 0.3
+    speed_kp: 0.04
+    speed_ki: 0.01
+fcu_interface:
+  ros__parameters:
+    live_output: false
+    # ArduPlane uses an axis-selective quaternion interpretation that differs
+    # from generic MAVLink. Set true only after verifying mask 132 in YOUR SITL.
+    partial_attitude_verified: false
+    mavros_namespace: /mavros
+    local_frame: map
+    abort_mode: RTL
+    status_timeout_s: 0.3
+    command_timeout_s: 0.2
+    mode_timeout_s: 3.0
+    roll_limit_deg: 20.0
+    pitch_min_deg: -8.0
+    pitch_max_deg: 12.0
+    throttle_min: 0.15
+    throttle_max: 0.7
+    maximum_roll_step_deg: 15.0
+    maximum_pitch_step_deg: 12.0

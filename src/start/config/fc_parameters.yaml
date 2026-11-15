@@ -1,0 +1,23 @@
+# FCU profile DATA file, not a ros__parameters node configuration.
+schema_version: 1
+configured: false  # Review values for your aircraft/SITL, then set true.
+description: Native ArduPlane glide-slope landing profile
+parameters:
+  # Explicit values are applied only with parameter_write_enabled:=true.
+  # They are illustrative starting values, NOT an aircraft-specific tune.
+  LAND_TYPE: 0
+  LAND_FLARE_ALT: 3.0
+  LAND_FLARE_SEC: 2.0
+  LAND_FLARE_AIM: 50
+  LAND_PF_ALT: 10.0
+  LAND_PF_SEC: 6.0
+  # Set a validated positive airspeed to enable native preflare.
+  # null preserves the FCU value (which may be 0, disabling preflare).
+  LAND_PF_ARSPD: null
+  # Other native LAND_* and TECS_LAND_* parameters are discovered automatically
+  # and preserved. Add explicit values here to change them. Examples:
+  # LAND_PITCH_DEG: null
+  # TECS_LAND_ARSPD: null
+  # TECS_LAND_SINK: null
+  # TECS_FLARE_HGT: null
+  # Only explicitly list names exposed by your actual firmware.

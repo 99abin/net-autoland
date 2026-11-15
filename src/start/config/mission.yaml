@@ -1,0 +1,16 @@
+mission_manager:
+  ros__parameters:
+    configured: false  # Set true ONLY after filling real/simulator coordinates.
+    prepare_on_start: true
+    upload_enabled: false  # launch argument controls this when using the launch file.
+    mavros_namespace: /mavros
+    land_lat: 0.0
+    land_lon: 0.0
+    # All mission altitudes are relative to the FCU HOME, frame 3.
+    # 1.35 = 0.35 m clearance + half the 2 m net height ONLY if HOME
+    # and the ground under the net have the same elevation.
+    land_alt: 1.35
+    approach_heading_deg: 0.0  # Aircraft travels north toward LAND; approach is south.
+    approach_distance_m: 300.0
+    approach_alt: 40.0
+    transaction_timeout_s: 20.0

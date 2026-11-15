@@ -1,0 +1,17 @@
+std_msgs/Header header
+bool verified
+string plan_id
+string reason
+uint32 item_count
+uint32 approach_index
+uint32 land_index
+uint8 altitude_frame
+float64 approach_lat
+float64 approach_lon
+float64 approach_alt
+float64 land_lat
+float64 land_lon
+float64 land_alt
+float64 heading_deg
+float64 distance_m
+string parameter_profile_id
