@@ -1,0 +1,37 @@
+# All MAVROS plugin nodes use the same Gazebo clock as the application.
+/**:
+  ros__parameters:
+    use_sim_time: true
+/mavros_node:
+  ros__parameters:
+    # Compatibility values for direct mavros_node invocation. The supported
+    # simulator launcher uses the separate components in mavros.launch.py.
+    fcu_url: tcp://127.0.0.1:5762
+    # QGC connects directly to SITL SERIAL0; disable MAVROS's extra GCS endpoint.
+    # An empty string is valid YAML, but an empty CLI override (gcs_url:=) is not.
+    gcs_url: ""
+    tgt_system: 1
+    tgt_component: 1
+/mavros:
+  ros__parameters:
+    # Avoid running every MAVROS/extras plugin on this simulator laptop.
+    # Keep every telemetry/service/setpoint interface consumed by this project.
+    plugin_denylist: ["*"]
+    plugin_allowlist:
+      - sys_status
+      - sys_time
+      - command
+      - param
+      - waypoint
+      - global_position
+      - local_position
+      - imu
+      - home_position
+      - setpoint_raw
+      - vfr_hud
+      - nav_controller_output
+/**/time:
+  ros__parameters:
+    timesync_mode: NONE
+    timesync_rate: 0.0
+    system_time_rate: 0.0

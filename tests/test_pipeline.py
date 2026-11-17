@@ -18,7 +18,7 @@ from autoland.geometry import euler_quaternion
 
 
 class PipelineTests(unittest.TestCase):
-    def test_auto_to_confirmed_guided_then_vision_loss_recovery(self):
+    def test_auto_to_guided_holds_target_through_loss_reacquires_then_recovers_on_bad_command(self):
         ros.clock.value = 1000.0
         ros.Node.overrides = {
             "landing_supervisor": dict(handoff_enabled=True, vision_stable_s=0.2),
@@ -75,10 +75,14 @@ class PipelineTests(unittest.TestCase):
                 ) = q
                 guidance.save("pose", pose)
                 bridge.pose_cb(pose)
-                guidance.save("air", ros.VFR_HUD(airspeed=15.0))
+                guidance.save("air", ros.VfrHud(airspeed=15.0))
                 if vision:
-                    net = stamp(supervisor, ros.NetEstimate(valid=True, score=1.0), "base_link")
+                    net = stamp(supervisor, ros.NetEstimate(valid=True, score=1.0, plan_id="abc"), "base_link")
                     net.pose.position.x = 30.0
+                    supervisor.save("net", net)
+                    guidance.save("net", net)
+                else:
+                    net = stamp(supervisor, ros.NetEstimate(valid=False), "base_link")
                     supervisor.save("net", net)
                     guidance.save("net", net)
 
@@ -121,6 +125,26 @@ class PipelineTests(unittest.TestCase):
                 bridge.command_cb(target)
                 bridge.tick()
                 supervisor.owner_cb(bridge.owner_pub.messages[-1])
+            self.assertEqual(supervisor.engine.state, "VISION_FINAL")
+            self.assertTrue(target.valid)
+            self.assertTrue(target.target_held)
+            self.assertGreater(target.target_age_s, .4)
+            self.assertEqual(len(bridge.mode_client.calls), 1)
+            ros.clock.value += .05
+            feed(True)
+            guidance.save("status", stamp(supervisor, supervisor.pub.messages[-1]))
+            guidance.tick()
+            self.assertTrue(guidance.pub.messages[-1].valid)
+            self.assertFalse(guidance.pub.messages[-1].target_held)
+            # Holding a target cannot bypass independent command/telemetry guards.
+            ros.clock.value += .05
+            feed(False)
+            guidance.save("air", ros.VfrHud(airspeed=0.))
+            guidance.tick()
+            supervisor.save("preview", guidance.pub.messages[-1])
+            bridge.command_cb(guidance.pub.messages[-1])
+            supervisor.tick()
+            bridge.tick()
             self.assertEqual(supervisor.engine.state, "ABORT")
             self.assertEqual(bridge.mode_client.calls[-1][0].custom_mode, "RTL")
 

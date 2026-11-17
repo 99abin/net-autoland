@@ -85,6 +85,13 @@ def rotate(q, vector):
     return inverse_rotate((-x, -y, -z, w), vector)
 
 
+def rotate_covariance(covariance, quaternion, inverse=False):
+    operation = inverse_rotate if inverse else rotate
+    columns = [operation(quaternion, tuple(float(i == j) for i in range(3))) for j in range(3)]
+    return [[sum(columns[i][r]*covariance[i][j]*columns[j][c]
+                 for i in range(3) for j in range(3)) for c in range(3)] for r in range(3)]
+
+
 def interpolate_pose(history, stamp, max_nearest_s=0.04):
     """History entries: (seconds, position_ENU, quaternion_FLU_to_ENU)."""
     if not history:

@@ -14,6 +14,8 @@ def generate_launch_description():
         DeclareLaunchArgument(k, default_value=v)
         for k, v in dict(
             use_sim_time="false",
+            clock_topic="/clock",
+            velocity_topic="/mavros/local_position/velocity_local",
             parameter_write_enabled="false",
             upload_enabled="false",
             handoff_enabled="false",
@@ -37,6 +39,8 @@ def generate_launch_description():
             executable=name,
             name=name,
             output="screen",
+            remappings=[("/clock", LaunchConfiguration("clock_topic")),
+                        ("/mavros/local_position/velocity_local", LaunchConfiguration("velocity_topic"))],
             parameters=[*[LaunchConfiguration(c) for c in configs], sim, overrides or {}],
         )
 

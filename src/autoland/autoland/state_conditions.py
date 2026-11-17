@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+from .terminal import TERMINAL_STATES
 
 
 @dataclass
@@ -51,9 +52,10 @@ class Supervisor:
         self.state = "WAITING"
         self.enabled = False
         self.reason = "Prepare and verify mission"
+        self.terminal_committed = False
 
     def enable(self, verified):
-        if not verified or self.state in ("ABORT", "COMPLETE", "VISION_FINAL", "HANDOFF_PENDING"):
+        if not verified or self.state in ("ABORT", "COMPLETE", "VISION_FINAL", "HANDOFF_PENDING", *TERMINAL_STATES):
             return False
         self.enabled = True
         self.state = "MISSION_READY"
@@ -61,9 +63,17 @@ class Supervisor:
         return True
 
     def abort(self, reason):
-        self.state = "ABORT"
+        self.state = "TERMINAL_FAULT" if self.terminal_committed else "ABORT"
         self.enabled = False
         self.reason = reason
+
+    def commit(self):
+        if self.state != "VISION_FINAL":
+            return False
+        self.terminal_committed = True
+        self.state = "TERMINAL_COMMITTED"
+        self.reason = "Terminal committed; bounded guidance and motor-off policy"
+        return True
 
     def step(
         self,
@@ -76,9 +86,9 @@ class Supervisor:
         ready,
         allow_handoff,
         owned,
-        missed_window=False,
+        handoff_window=False,
     ):
-        if self.state in ("ABORT", "COMPLETE"):
+        if self.state in ("ABORT", "COMPLETE", "NET_CONTACT", "MISSED_NET", "TERMINAL_FAULT"):
             return None
         if not self.enabled:
             self.state = "MISSION_READY" if verified else "WAITING"
@@ -87,7 +97,7 @@ class Supervisor:
             self.abort("Mission or telemetry unavailable")
             return "ABORT"
         if not armed:
-            if self.state in ("HANDOFF_PENDING", "VISION_FINAL"):
+            if self.state in ("HANDOFF_PENDING", "VISION_FINAL", "TERMINAL_COMMITTED"):
                 self.abort("Aircraft disarmed during active control")
                 return "RELEASE"
             self.state = "MISSION_READY"
@@ -100,7 +110,7 @@ class Supervisor:
                 self.abort("Pilot/FCU changed mode during handoff")
                 return "RELEASE"
             return None
-        if self.state == "VISION_FINAL":
+        if self.state in ("VISION_FINAL", "TERMINAL_COMMITTED"):
             if mode != "GUIDED" or not owned:
                 self.abort("Vision control ownership lost")
                 return "RELEASE"
@@ -108,9 +118,11 @@ class Supervisor:
         if mode == "AUTO" and landing_active:
             self.state = "AUTO_APPROACH"
             self.reason = "Native ArduPlane approach"
-            if allow_handoff and missed_window and not ready:
-                self.abort("Handoff boundary reached without valid aligned vision control")
-                return "ABORT"
+            if handoff_window and not ready:
+                # Native AUTO retains control until the complete handoff
+                # contract is satisfied. A missing target is not a reason to
+                # interrupt an otherwise healthy native landing.
+                self.reason = "Handoff window open; staying in AUTO until vision control is ready"
             if ready:
                 self.reason = (
                     "Handoff ready (preview)"

@@ -14,6 +14,7 @@ class DetectionConfig:
     min_aspect: float = 0.8
     max_aspect: float = 6.0
     max_image_fraction: float = 0.90
+    border_margin_px: int = 2
 
 
 def order_corners(points):
@@ -62,4 +63,44 @@ def detect_rectangle(bgr, c=DetectionConfig()):
         if rank > best_rank:
             best = (quad, score)
             best_rank = rank
+    return best, mask
+
+
+def detect_center(bgr, c=DetectionConfig()):
+    """Colour-region centre heuristic; no four-corner fit or pose inference.
+
+    A visible fragment/occlusion can bias this centroid. Image-edge clipping is
+    rejected, but interior occlusion and false colour associations remain limits.
+    """
+    if bgr is None or bgr.ndim != 3 or bgr.shape[2] != 3:
+        raise ValueError("Expected BGR image")
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, np.asarray(c.hsv_lower, np.uint8), np.asarray(c.hsv_upper, np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best, rank = None, -1.
+    height, width = bgr.shape[:2]
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if not c.min_area_px <= area <= width * height * c.max_image_fraction:
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        border = c.border_margin_px
+        if x <= border or y <= border or x + w >= width - border or y + h >= height - border:
+            continue
+        (_, _), (a, b), _ = cv2.minAreaRect(contour)
+        if min(a, b) < 2:
+            continue
+        aspect = max(a, b) / min(a, b)
+        fill = area / max(a * b, 1.)
+        solidity = area / max(cv2.contourArea(cv2.convexHull(contour)), 1.)
+        if not c.min_aspect <= aspect <= c.max_aspect or fill < c.min_fill:
+            continue
+        moments = cv2.moments(contour)
+        if moments["m00"] <= 0:
+            continue
+        score = float(min(fill, solidity, 1.))
+        if area * score > rank:
+            center = np.array([moments["m10"] / moments["m00"], moments["m01"] / moments["m00"]])
+            best, rank = (center, score, float(area)), area * score
     return best, mask

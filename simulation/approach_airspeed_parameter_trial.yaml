@@ -1,0 +1,5 @@
+simulator_only: true
+description: Requested Merlin 15 m/s approach and retained 13.3 m/s preflare; preserve gains
+parameters:
+  TECS_LAND_ARSPD: 15.0
+  LAND_PF_ARSPD: 13.3

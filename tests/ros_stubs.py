@@ -42,10 +42,12 @@ NavSatFix = message(
         "latitude": float,
         "longitude": float,
         "altitude": float,
+        "position_covariance": lambda: [0.] * 9,
+        "position_covariance_type": int,
         "status": lambda: NS(status=0),
     },
 )
-VFR_HUD = message("VFR_HUD", {"header": Header, "airspeed": float, "groundspeed": float})
+VfrHud = message("VfrHud", {"header": Header, "airspeed": float, "groundspeed": float})
 Waypoint = message(
     "Waypoint",
     {
@@ -241,7 +243,7 @@ def install():
         "sensor_msgs.msg": ["NavSatFix", "CameraInfo", "Image"],
         "geometry_msgs.msg": ["PoseStamped", "TwistStamped"],
         "std_msgs.msg": ["String", "Float64"],
-        "mavros_msgs.msg": ["State", "Waypoint", "WaypointList", "VFR_HUD", "AttitudeTarget"],
+        "mavros_msgs.msg": ["State", "Waypoint", "WaypointList", "VfrHud", "AttitudeTarget"],
     }
     for module, names in maps.items():
         for name in names:

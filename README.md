@@ -5,7 +5,9 @@ AUTO landing approach. A supervisor can transfer final-phase control to GUIDED
 when the approach geometry, vision estimate, and controller are ready.
 
 **Default behavior is preview-only:** no FCU parameter writes, mission upload, mode change, arming, or
-attitude/throttle actuation. The system never arms the aircraft automatically.
+attitude/throttle actuation. The application never arms the aircraft automatically.
+The separate `sim.sh auto-test --execute` utility explicitly permits arming only
+its managed local SITL for an autonomous simulation experiment.
 The final controller is experimental interception guidance, not a port of TECS
 and not a validated aircraft/net capture controller.
 
@@ -21,8 +23,17 @@ and not a validated aircraft/net capture controller.
 MAVROS and a calibrated camera driver must run separately. The launch file does
 not guess your serial device, MAVLink port, camera device, or simulator.
 
+For the local Merlin V2 / Gazebo landing world / QGroundControl setup and the
+configured 500 m southbound landing leg, see [simulation/README.md](simulation/README.md).
+For commands to copy terminal by terminal, see [simulation_command.md](simulation_command.md).
+The full SITL experiment uses an explicit `autoland` command after a disarmed
+attitude-interface check; ordinary preview defaults stay disabled. It enables
+the existing early handoff and live simulated guidance without claiming capture.
+For the optional simulator catapult and native AUTO flight experiment, see
+[NATIVE_AUTO_FLIGHT_TEST.md](NATIVE_AUTO_FLIGHT_TEST.md).
+
 The blue/purple **5.5 m × 2.0 m rectangular panel** from your reference is the
-visual target. The color detector uses HSV segmentation and quadrilateral shape;
+visual target. The colour detector uses HSV segmentation and a region centroid;
 no ArUco marker or downloaded model is required. The supplied reference image is
 included only as a detection regression fixture under `tests/data`.
 
@@ -43,18 +54,60 @@ left untouched. Builds below use separate output directories.
 
 ## Build: Ubuntu 22.04 / ROS 2 Humble example
 
-Use the Python environment supplied by your ROS installation for runtime.
+Use Ubuntu's `/usr/bin/python3` (Python 3.10) with `/opt/ros/humble`.
+From the workspace root, build without sourcing any environment first:
 
 ```bash
-source /opt/ros/humble/setup.bash
-rosdep install --from-paths src --ignore-src -r -y
 bash tools/build.sh
-source install_handoff/setup.bash
 ```
 
 `tools/build.sh` uses `build_handoff`, `install_handoff`, and `log_handoff` to avoid
-reusing the branch's old generated files. Change the ROS distribution source path
-if appropriate; Humble/Python 3.10 is the intended build target.
+reusing the branch's old generated files. It runs colcon using `/usr/bin/python3`,
+regenerates the CMake cache with `Python3_EXECUTABLE=/usr/bin/python3`, and keeps
+other build outputs. Deactivating Conda alone does not reset a cached interpreter.
+
+`tools/ros_env.sh` runs commands in a child shell with only the Humble underlay,
+a system-only PATH, and Python user packages disabled. This avoids inherited
+Conda/pyenv, ROS Noetic/catkin, stale workspace prefixes, and user-installed NumPy
+overriding Ubuntu's `cv_bridge` dependencies. It preserves ROS transport settings
+such as `ROS_DOMAIN_ID`. No shell startup files or other environments are modified.
+`tools/run.sh` uses the same environment and adds the built overlay. Its launch
+defaults remain preview-only; do not enable live flags for build verification.
+
+To check dependencies (or install missing ones with rosdep):
+
+```bash
+bash tools/ros_env.sh rosdep check --from-paths src --ignore-src --rosdistro humble
+# Only if dependencies are missing:
+bash tools/ros_env.sh rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
+```
+
+The build needs `python3-colcon-common-extensions`, `python3-setuptools`,
+`python3-catkin-pkg`, `python3-empy`, and `ros-humble-rosidl-default-generators`.
+Ubuntu's `python3-empy` supplies the module named `em`; the pip package named
+`em` is unrelated. Do not pip-upgrade the ROS system Python dependencies.
+
+For package discovery in a terminal that may already have Conda/pyenv or ROS 1
+active, open an isolated interactive shell (exit it to return to your original
+environment), then source the installation:
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/ros_env.sh bash --noprofile --norc -i
+source install_handoff/setup.bash
+which python3                         # /usr/bin/python3
+ros2 pkg executables autoland
+ros2 pkg executables perception
+```
+
+For checks without opening another shell:
+
+```bash
+bash tools/ros_env.sh --overlay ros2 pkg executables autoland
+bash tools/ros_env.sh --overlay ros2 pkg executables perception
+bash tools/ros_env.sh bash tools/test.sh
+bash tools/run.sh --show-args          # inspect launch defaults without starting nodes
+```
 
 A Dockerfile is also supplied as a build recipe (`docker build -t net-autoland .`).
 It was not built in the review environment. MAVROS itself also requires its usual
@@ -80,8 +133,12 @@ Two files have different purposes:
 Review `fc_parameters.yaml`, enter your aircraft/SITL-specific values, then set
 `configured: true`. Explicit numbers are desired FCU values. **`null` means preserve
 the value read from the FCU**, not zero and not an unset parameter. The included
-preflare airspeed is null: change `LAND_PF_ARSPD` to a validated positive speed to
-enable native preflare, or preserve 0 to keep it disabled.
+preflare airspeed is **13.3 m/s** for the Merlin simulator: its model README's
+analytical stall estimate of 11.3 m/s at 5 kg plus the requested 2 m/s margin.
+The custom ROS target uses the same number. This is not a measured aircraft
+stall speed; review before configuring a real aircraft. A positive
+`LAND_PF_ARSPD` enables native preflare; zero disables it and null preserves the
+FCU's current value. The simulator profile also explicitly requests 13.3 m/s.
 
 The manager discovers available `LAND_*` and `TECS_LAND_*` names plus relevant
 flare/approach and airspeed-limit parameters on the actual FCU. Names not explicitly
@@ -215,25 +272,42 @@ Edit `src/start/config/perception.yaml`:
 
 1. Set image and CameraInfo topics and their exact optical frame name.
 2. Supply real pinhole camera calibration at the actual image resolution.
-3. Set physical target width/height and the measured camera-to-body transform.
+3. Set the measured camera-to-body transform and localization/survey uncertainty.
 4. Adjust HSV thresholds to the real camera's blue panel under expected lighting.
-5. Keep `target_offset_net_m: [0, 0, 0]` to aim at the rectangle centre.
+5. Survey the net GPS location. The vertical plane is perpendicular to
+   `approach_heading_deg` in mission.yaml. This assumes the actual net faces
+   that approach; the flight direction must match its surveyed orientation.
 
 The default optical→body rotation assumes a rigid, forward-facing camera:
 optical x right, y down, z forward → body x forward, y left, z up (FLU). Camera
 translation defaults to zero and MUST be replaced if materially offset.
 
-Object points are ordered top-left, top-right, bottom-right, bottom-left; the net
-object frame has x right, y down, z normal. Large camera roll/occlusion can make
-this corner association ambiguous. The detector requires the complete target
-quadrilateral, and selects the largest matching region. Another similarly colored
-rectangle can be misidentified; color score is NOT a semantic probability.
+`net_det` publishes centre pixels, image dimensions, area and score. Four corners
+are no longer required. The largest acceptable blue region is used; this is a
+centroid heuristic, not a trained physical-centre keypoint detector. Occlusion,
+perspective and false colour association can bias it. Image-border clipping is
+rejected. Colour score is not a semantic probability.
 
-`net_pos` uses planar PnP with known dimensions, checks positive depth and
-reprojection error, and estimates local pixel-noise position covariance. That
-covariance does not include calibration error, incorrect dimensions, or false
-association. Fisheye sources need rectification/calibration in a supported pinhole
-model. Do not invent a camera matrix from the reference screenshot.
+`net_pos` undistorts the centre pixel and intersects its ray with the surveyed
+VERTICAL net plane, using synchronized GPS and local attitude at image time.
+It requires a fresh verified landing plan, calibrated image resolution, known
+GPS horizontal covariance and local-pose history. Plane heading is the landing
+plan's travel heading; reversing its normal does not change the plane. This is
+not intersection with a horizontal plane at net altitude. No PnP or known net
+size is used by the runtime estimator. Parallel, backward and distant rays are
+rejected. Error propagation includes configured pixel/attitude/local-position/
+survey budgets and GPS covariance; it does not model false association or all
+camera-calibration bias. Review these assumed budgets for actual equipment.
+
+A stationary-position Kalman filter in local ENU weights observations by their
+uncertainty. It rejects inconsistent jumps and retains a minimum uncertainty
+floor. Rejected/missing observations never become fresh valid estimates. Plan,
+calibration, clock and invalid-frame resets clear the filter and notify the
+controller through tracking_epoch, clearing any incompatible held target.
+NetEstimate carries plan_id, estimation_method and ray_plane_incidence instead
+of the old PnP reprojection diagnostic. Orientation is not measured; its
+covariance is large. All interface consumers must be rebuilt together.
+Fisheye sources need appropriate rectification. Do not invent camera calibration.
 
 The estimate retains the image timestamp. Guidance interpolates aircraft pose
 history to compensate the target from image time to the current body frame. A
@@ -328,8 +402,21 @@ interface requests GUIDED. Only FCU telemetry confirming GUIDED grants ownership
 `SetMode.mode_sent` alone is not confirmation.
 
 When live handoff is enabled, entering the handoff window without stable vision,
-alignment and bounded control targets requests recovery instead of continuing
-blindly toward the net. Vision must be acquired and stable BEFORE that boundary.
+alignment and bounded control targets leaves native AUTO in control. The
+supervisor keeps checking and requests GUIDED only when the full handoff contract
+passes before LAND. If vision never becomes ready, ArduPlane continues its native
+AUTO landing; ROS does not claim a net capture. A detection lost before the
+handoff request resets the stability check and leaves AUTO unchanged. After a
+handoff request or vision ownership, detector gaps use the last accepted net
+position in the local map frame. Current aircraft pose transforms that stationary
+target back into the current body frame each tick. New valid observations update
+it; invalid observations do not overwrite it or renew its age. By default,
+`target_hold_timeout_s: 0.0` sets no age expiry during active handoff/control;
+a positive value sets an age limit. Held targets cannot initiate handoff.
+Control commands report `target_held` and the original image's `target_age_s`.
+Invalid guidance/commands still request RTL rather than silently returning to
+AUTO. Telemetry/plan/profile failures and operator aborts
+retain their existing recovery behavior.
 The trigger uses a margin before the nominal flare threshold. It is a ROS
 supervisor condition, NOT telemetry of ArduPilot's internal flare stage. Its
 height/sink estimates need not match native rangefinder/terrain-corrected flare.
@@ -377,7 +464,9 @@ checked by the single FCU writer independently of the guidance node.
 
 - Freshness uses both measurement timestamps where available and monotonic receipt
   time. Float64 relative altitude and some status inputs have receipt checks only.
-- Loss of vision/commands/supervisor ownership requests configured recovery while
+- Detection gaps after handoff track the last accepted stationary target while
+  aircraft telemetry and guidance remain valid. Loss of valid commands or
+  supervisor ownership requests configured recovery while
   owned in AUTO/GUIDED. The default recovery is RTL. Success is confirmed through
   actual mode telemetry. Link loss cannot guarantee that an RTL request arrives;
   configure/test onboard failsafes independently.
@@ -440,7 +529,8 @@ bash tools/test.sh
 Tests cover mission geometry/duplicates/readback, handshake sequencing, command
 watchdogs, pilot override, capture event, synthetic calibrated pose recovery,
 detection of your actual reference image, image-to-pose processing, timestamped
-motion compensation, and a complete AUTO→GUIDED→vision-loss recovery scenario.
+motion compensation, and AUTO→GUIDED→target hold→reacquisition with recovery
+when valid control is lost.
 ROS transports in node tests are doubles. A passing suite does NOT establish DDS,
 colcon/IDL generation, MAVROS interoperability, or flight stability.
 

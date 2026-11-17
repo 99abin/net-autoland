@@ -109,6 +109,45 @@ class MissionTests(unittest.TestCase):
         changed = [replace(i, is_current=True) for i in self.base]
         self.assertEqual(fingerprint(self.base), fingerprint(changed))
 
+    def test_arduplane_land_direction_readback_and_restart(self):
+        expected, _ = extend_mission(self.base, self.c)
+        self.assertEqual(expected[-1].param4, 1.0)
+        # Match the observed FCU readback: positive direction and quantized GPS.
+        readback = [replace(item) for item in expected]
+        readback[-2].x_lat = int(readback[-2].x_lat * 1e7) / 1e7
+        readback[-1].z_alt -= 1e-8
+        self.assertTrue(same_mission(expected, readback))
+        reused, already = extend_mission(readback, self.c)
+        self.assertTrue(already)
+        self.assertEqual(len(reused), len(expected))
+
+    def test_land_readback_still_rejects_changed_direction(self):
+        expected, _ = extend_mission(self.base, self.c)
+        changed = [replace(item) for item in expected]
+        changed[-1].param4 = -1.0
+        self.assertFalse(same_mission(expected, changed))
+
+    def test_gps_tolerance_boundary_survives_binary_roundoff(self):
+        expected, _ = extend_mission(self.base, self.c)
+        expected[-1].x_lat = -35.3637111
+        readback = [replace(item) for item in expected]
+        readback[-1].x_lat = -35.3637109
+        self.assertTrue(same_mission(expected, readback))
+        # The observed LAND readback must be reusable without appending again.
+        config = replace(self.c, land_lat=-35.3637111)
+        mission, _ = extend_mission(self.base, config)
+        mission[-1].x_lat = -35.3637109
+        reused, already = extend_mission(mission, config)
+        self.assertTrue(already)
+        self.assertEqual(len(reused), len(mission))
+
+    def test_gps_outside_existing_tolerance_still_rejected(self):
+        expected, _ = extend_mission(self.base, self.c)
+        expected[-1].x_lat = -35.3637111
+        readback = [replace(item) for item in expected]
+        readback[-1].x_lat = -35.363710899
+        self.assertFalse(same_mission(expected, readback))
+
 
 class SupervisorTests(unittest.TestCase):
     def context(self, **kw):
@@ -137,11 +176,16 @@ class SupervisorTests(unittest.TestCase):
         s.step(**self.context(mode="GUIDED", owned=True))
         self.assertEqual(s.state, "VISION_FINAL")
 
-    def test_missed_vision_window_aborts_native_approach(self):
+    def test_missing_or_lost_vision_before_handoff_keeps_native_auto(self):
         s = Supervisor()
         s.enable(True)
-        self.assertEqual(s.step(**self.context(missed_window=True)), "ABORT")
-        self.assertEqual(s.state, "ABORT")
+        for _ in range(5):
+            self.assertIsNone(s.step(**self.context(handoff_window=True)))
+            self.assertEqual(s.state, "AUTO_APPROACH")
+            self.assertTrue(s.enabled)
+        self.assertIn("staying in AUTO", s.reason)
+        self.assertEqual(s.step(**self.context(handoff_window=True, ready=True)), "VISION")
+        self.assertEqual(s.state, "HANDOFF_PENDING")
 
     def test_preview_never_requests_mode(self):
         s = Supervisor()

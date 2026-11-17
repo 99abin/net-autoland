@@ -2,6 +2,7 @@
 
 import math
 import time
+import copy
 from rclpy.node import Node
 from mavros_msgs.msg import State, AttitudeTarget
 from geometry_msgs.msg import PoseStamped
@@ -11,6 +12,7 @@ from autoland_interfaces.msg import LandingStatus, ControlSetpoint, ParameterPro
 from autoland_interfaces.srv import SetControlOwnership
 from .geometry import euler_quaternion, quaternion_euler, finite
 from .ros_util import params, retained, recent, stamped_recent, profile_values, run
+from .terminal import TERMINAL_STATES, ZERO_THRUST_STATES
 
 # ArduPlane-specific partial quaternion interpretation in handle_set_attitude_target:
 # inverted axis bits select roll/pitch; IGNORE_ATTITUDE suppresses the all-angle
@@ -19,13 +21,14 @@ from .ros_util import params, retained, recent, stamped_recent, profile_values, 
 ARDUPLANE_ROLL_PITCH_THRUST_MASK = 128 | 4
 
 
-def command_in_envelope(cmd, p):
+def command_in_envelope(cmd, p, terminal=False):
     return (
         cmd.valid
-        and finite(cmd.roll_rad, cmd.pitch_rad, cmd.yaw_enu_rad, cmd.thrust)
-        and abs(cmd.roll_rad) <= math.radians(p["roll_limit_deg"])
+        and finite(cmd.roll_rad, cmd.pitch_rad, cmd.yaw_enu_rad, cmd.thrust, cmd.target_age_s)
+        and cmd.target_age_s >= 0
+        and abs(cmd.roll_rad) <= math.radians(min(p["roll_limit_deg"], p["terminal_roll_limit_deg"]) if terminal else p["roll_limit_deg"])
         and math.radians(p["pitch_min_deg"]) <= cmd.pitch_rad <= math.radians(p["pitch_max_deg"])
-        and p["throttle_min"] <= cmd.thrust <= p["throttle_max"]
+        and (0. if terminal else p["throttle_min"]) <= cmd.thrust <= p["throttle_max"]
     )
 
 
@@ -36,6 +39,8 @@ class FCUInterface(Node):
             self,
             dict(
                 live_output=False,
+                terminal_enabled=False,
+                terminal_roll_limit_deg=5.0,
                 partial_attitude_verified=False,
                 mavros_namespace="/mavros",
                 local_frame="map",
@@ -99,6 +104,9 @@ class FCUInterface(Node):
         self.last_sent = None
         self.last_sent_time = None
         self.capture_target = None
+        self.terminal_latched = False
+        self.terminal_fault = False
+        self.fault_reason = None
         self.create_timer(0.05, self.tick)
 
     def profile_cb(self, msg):
@@ -128,10 +136,13 @@ class FCUInterface(Node):
         return stamped_recent(self, self.status, self.status_time, self.p["status_timeout_s"])
 
     def fresh_command(self):
+        terminal = (self.p["terminal_enabled"] and self.terminal_latched and self.fresh_status()
+                    and self.status.state in TERMINAL_STATES and self.command is not None
+                    and self.command.terminal_mode)
         return (
             stamped_recent(self, self.command, self.command_time, self.p["command_timeout_s"])
             and self.command.header.frame_id == self.p["local_frame"]
-            and command_in_envelope(self.command, self.p)
+            and command_in_envelope(self.command, self.p, terminal)
         )
 
     def fresh_state(self):
@@ -162,6 +173,9 @@ class FCUInterface(Node):
                 return res
             if not self.fresh_command() or self.command.plan_id != req.plan_id:
                 res.message = "No matching fresh bounded preview command"
+                return res
+            if self.command.target_held:
+                res.message = "Fresh visual target required to initiate handoff"
                 return res
             if not self.initial_target_ok():
                 res.message = "Need fresh pose and continuous initial attitude target"
@@ -236,6 +250,13 @@ class FCUInterface(Node):
             self.future = self.mode_client.call_async(req)
 
     def abort(self, reason):
+        if self.p["terminal_enabled"] and self.terminal_latched:
+            if self.fault_reason != reason:
+                self.get_logger().error("Terminal fault: " + reason + "; zero thrust, no automatic RTL")
+            self.fault_reason = reason
+            self.terminal_fault = True
+            self.requested_mode = self.future = None
+            return
         self.get_logger().error(reason)
         self.capture_target = None
         self.last_sent = None
@@ -264,11 +285,18 @@ class FCUInterface(Node):
 
     def tick(self):
         now = time.monotonic()
+        if (self.p["terminal_enabled"] and self.owner == "VISION" and self.fresh_status()
+                and self.status.plan_id == self.plan_id and self.status.state in TERMINAL_STATES):
+            self.terminal_latched = True
         # Preview never reaches MAVROS and is available in AUTO before handoff.
         if self.fresh_command():
             self.preview_pub.publish(self.target(self.command))
         if self.owner in ("PENDING", "VISION"):
-            if not self.fresh_state():
+            if self.fresh_state() and (not self.state.armed or self.state.mode not in ("AUTO", "GUIDED")):
+                self.owner = "NONE"
+                self.requested_mode = None
+                self.terminal_latched = self.terminal_fault = False
+            elif not self.fresh_state():
                 self.abort("FCU heartbeat lost")
             elif not self.profile_ok() or self.profile.profile_id != self.active_profile_id:
                 self.abort("FCU parameter readiness lease lost or changed")
@@ -316,7 +344,9 @@ class FCUInterface(Node):
                     self.get_logger().error(str(exc))
                 # Avoid flooding: retry only when the deadline expires.
         if self.owner == "VISION":
-            if self.status.state == "COMPLETE":
+            if self.terminal_fault or (self.terminal_latched and self.status.state in ZERO_THRUST_STATES):
+                self.publish_zero_hold()
+            elif self.status.state == "COMPLETE":
                 # Explicit stationary capture confirmation: hold last attitude
                 # with zero thrust until pilot disarms or changes mode.
                 if self.capture_target is None and self.last_sent is not None:
@@ -325,7 +355,7 @@ class FCUInterface(Node):
                 if self.capture_target is not None and self.p["live_output"]:
                     self.capture_target.header.stamp = self.get_clock().now().to_msg()
                     self.pub.publish(self.capture_target)
-            elif self.status.state in ("HANDOFF_PENDING", "VISION_FINAL"):
+            elif self.status.state in ("HANDOFF_PENDING", "VISION_FINAL", "TERMINAL_COMMITTED"):
                 if not self.fresh_command() or self.command.plan_id != self.plan_id:
                     self.abort("Vision command watchdog expired")
                 elif self.p["live_output"]:
@@ -348,6 +378,14 @@ class FCUInterface(Node):
             else:
                 self.abort("Supervisor no longer grants vision control")
         self.owner_pub.publish(String(data=self.owner))
+
+    def publish_zero_hold(self):
+        if self.capture_target is None and self.last_sent is not None:
+            self.capture_target = copy.deepcopy(self.last_sent)
+            self.capture_target.thrust = 0.
+        if self.capture_target is not None and self.p["live_output"]:
+            self.capture_target.header.stamp = self.get_clock().now().to_msg()
+            self.pub.publish(self.capture_target)
 
     def publish_command(self, now):
         target = self.target(self.command)

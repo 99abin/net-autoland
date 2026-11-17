@@ -1,0 +1,7 @@
+# Gazebo-only catapult approximation, not a real-aircraft launch specification.
+# Applied once, at the original model origin (all-up CG), then removed by sim time.
+duration_s: 0.75
+forward_force_n: 120.0
+upward_force_n: 80.0
+maximum_initial_speed_mps: 2.0
+maximum_initial_height_m: 0.35

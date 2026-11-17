@@ -1,0 +1,10 @@
+# Experimental local-SITL comparison, not a real-aircraft tune.
+# Only P changes relative to landing_airspeed_parameter_trial.yaml.
+simulator_only: true
+description: Test stronger native pitch-rate error feedback at the corrected landing speed
+parameters:
+  PTCH_RATE_FF: 0.6
+  PTCH_RATE_I: 0.6
+  PTCH_RATE_P: 0.08
+  LAND_OPTIONS: 2
+  TECS_LAND_ARSPD: 23.0

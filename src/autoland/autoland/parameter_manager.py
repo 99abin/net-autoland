@@ -102,7 +102,11 @@ class ParameterManager(Node):
         self.state_time = time.monotonic()
 
     def event_cb(self, event):
-        if event.node != self.param_node or not self.status.verified:
+        if event.node != self.param_node:
+            return
+        if not self.status.verified and self.phase not in (
+            "CACHE_RECHECK_REQUEST", "CACHE_RECHECK_WAIT"
+        ):
             return
         for p in list(event.new_parameters) + list(event.changed_parameters):
             if p.name in self.expected:
@@ -110,10 +114,25 @@ class ParameterManager(Node):
                     value, kind = decode_value(p.value)
                     if kind != self.kinds[p.name] or not equal_value(value, self.expected[p.name]):
                         self.fail(f"Verified FCU parameter changed: {p.name}")
+                        return
                 except ValueError as exc:
                     self.fail(str(exc))
-        if any(p.name in self.expected for p in event.deleted_parameters):
-            self.fail("A verified FCU parameter was removed")
+                    return
+        removed = sorted(p.name for p in event.deleted_parameters if p.name in self.expected)
+        if removed:
+            # MAVROS clears its ROS parameter cache on a pull/reconnect. Revoke
+            # readiness immediately; while safely on the ground, read the whole
+            # verified set again instead of treating a cache event as FCU deletion.
+            if self.phase == "IDLE" and self.safe_preflight():
+                self.status.verified = False
+                self.status.state = "READING"
+                self.status.reason = "MAVROS parameter cache refreshed; rechecking verified values"
+                self.phase = "CACHE_RECHECK_REQUEST"
+                self.deadline = time.monotonic() + self.p["service_timeout_s"]
+                self.publish()
+            else:
+                self.fail("MAVROS cache removed verified parameters: " + ", ".join(removed)
+                          + "; preflight sync required")
 
     def safe_preflight(self):
         return (
@@ -278,6 +297,11 @@ class ParameterManager(Node):
                     "READ_WAIT" if self.phase == "READ_REQUEST" else "VERIFY_WAIT",
                 )
                 return
+            if self.phase == "CACHE_RECHECK_REQUEST":
+                request = GetParameters.Request()
+                request.names = self.names
+                self.start_rpc(self.get, request, "CACHE_RECHECK_WAIT")
+                return
             if self.phase == "WRITE_REQUEST":
                 if not self.pending:
                     # A forced re-pull verifies FCU values, not just cached desired values.
@@ -358,7 +382,7 @@ class ParameterManager(Node):
                 self.pending.pop(0)
                 self.phase = "WRITE_REQUEST"
                 self.deadline = now + self.p["service_timeout_s"]
-            elif self.phase in ("VERIFY_WAIT", "MONITOR_WAIT"):
+            elif self.phase in ("VERIFY_WAIT", "MONITOR_WAIT", "CACHE_RECHECK_WAIT"):
                 actual, kinds = self.decode_response(result)
                 changed = [
                     name

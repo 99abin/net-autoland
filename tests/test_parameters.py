@@ -327,6 +327,66 @@ class ParameterNodeTests(unittest.TestCase):
         node.tick()
         self.assertFalse(node.status.verified)
 
+    def test_cache_refresh_revokes_then_rechecks_without_writes(self):
+        node = self.manager(True)
+        node.sync_cb(None, NS())
+        self.drive(node)
+        before = len(node.set.calls)
+        node.event_cb(ParameterEvent(node="/mavros/param", deleted_parameters=[
+            Parameter(name="LAND_FLARE_ALT")]))
+        self.assertFalse(node.status.verified)
+        self.assertEqual(node.phase, "CACHE_RECHECK_REQUEST")
+        self.drive(node)
+        self.assertTrue(node.status.verified)
+        self.assertEqual(len(node.set.calls), before)
+
+    def test_cache_refresh_rejects_actual_missing_parameter(self):
+        node = self.manager(True)
+        node.sync_cb(None, NS())
+        self.drive(node)
+        del self.native["LAND_FLARE_ALT"]
+        node.event_cb(ParameterEvent(node="/mavros/param", deleted_parameters=[
+            Parameter(name="LAND_FLARE_ALT")]))
+        self.drive(node)
+        self.assertFalse(node.status.verified)
+        self.assertEqual(node.status.state, "FAILED")
+
+    def test_cache_refresh_rejects_changed_parameter(self):
+        node = self.manager(True)
+        node.sync_cb(None, NS())
+        self.drive(node)
+        self.native["LAND_FLARE_ALT"] = 9.0
+        node.event_cb(ParameterEvent(node="/mavros/param", deleted_parameters=[
+            Parameter(name="LAND_FLARE_ALT")]))
+        self.drive(node)
+        self.assertFalse(node.status.verified)
+        self.assertIn("mismatch", node.status.reason)
+
+    def test_cache_deletion_in_flight_requires_preflight_sync(self):
+        node = self.manager(True)
+        node.sync_cb(None, NS())
+        self.drive(node)
+        node.state_cb(ros.State(connected=True, armed=True, mode="AUTO"))
+        node.event_cb(ParameterEvent(node="/mavros/param", deleted_parameters=[
+            Parameter(name="LAND_FLARE_ALT")]))
+        self.assertFalse(node.status.verified)
+        self.assertEqual(node.phase, "IDLE")
+        self.assertIn("preflight sync required", node.status.reason)
+
+    def test_changed_event_during_cache_recheck_cannot_restore_readiness(self):
+        node = self.manager(True)
+        node.sync_cb(None, NS())
+        self.drive(node)
+        node.event_cb(ParameterEvent(node="/mavros/param", deleted_parameters=[
+            Parameter(name="LAND_FLARE_ALT")]))
+        node.tick()  # Authoritative get is now in flight.
+        node.event_cb(ParameterEvent(node="/mavros/param", changed_parameters=[
+            Parameter(name="LAND_FLARE_ALT", value=value(9.0))]))
+        self.respond(node)
+        node.tick()
+        self.assertFalse(node.status.verified)
+        self.assertEqual(node.status.state, "FAILED")
+
     def test_export_creates_full_editable_yaml(self):
         node = self.manager(True)
         node.sync_cb(None, NS())

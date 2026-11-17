@@ -1,0 +1,14 @@
+# SITL ONLY: apply requested approach/preflare targets; preserve other values.
+schema_version: 1
+configured: true
+description: Merlin Gazebo SITL - 15 m/s approach and 13.3 m/s preflare
+parameters:
+  LAND_TYPE: 0
+  LAND_FLARE_ALT: null
+  LAND_FLARE_SEC: null
+  LAND_FLARE_AIM: null
+  LAND_PF_ALT: null
+  LAND_PF_SEC: null
+  # Model README: nominal stall 11.3 m/s at 5 kg (analytical estimate).
+  LAND_PF_ARSPD: 13.3
+  TECS_LAND_ARSPD: 15.0

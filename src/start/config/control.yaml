@@ -23,11 +23,17 @@ vision_controller:
     local_frame: map
     body_frame: base_link
     vision_timeout_s: 0.25
+    # After handoff, guide to the last accepted stationary net position through
+    # detection gaps. 0 = no age expiry; >0 limits wall AND image age in seconds.
+    # Does not permit cached targets to initiate handoff or bypass other guards.
+    target_hold_timeout_s: 0.0
     telemetry_timeout_s: 0.5
     min_vision_score: 0.5
     max_position_std_m: 2.0
     # Experimental SITL starting values, NOT an aircraft-specific tune.
-    target_airspeed_mps: 15.0
+    # Merlin SITL: estimated stall 11.3 m/s at 5 kg + requested 2 m/s margin.
+    # Analytical model estimate, not a measured aircraft stall speed.
+    target_airspeed_mps: 13.3
     minimum_airspeed_mps: 10.0
     minimum_forward_speed_mps: 5.0
     minimum_range_m: 2.5

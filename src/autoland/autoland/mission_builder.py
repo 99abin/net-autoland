@@ -66,7 +66,16 @@ def same_item(a, b):
             if math.isnan(x) and math.isnan(y):
                 continue
             tolerance = 2e-7 if key in ("x_lat", "y_long") else 0.02
-            if not math.isfinite(x) or not math.isfinite(y) or abs(x - y) > tolerance:
+            if not math.isfinite(x) or not math.isfinite(y):
+                return False
+            difference = abs(x - y)
+            # Decimal GPS coordinates are binary floats: a difference of exactly
+            # 2e-7 degrees can evaluate as 2.000000023e-7. Allow only arithmetic
+            # roundoff at the existing boundary (1e-12 degrees, < 1 micrometre).
+            at_gps_boundary = key in ("x_lat", "y_long") and math.isclose(
+                difference, tolerance, rel_tol=0.0, abs_tol=1e-12
+            )
+            if difference > tolerance and not at_gps_boundary:
                 return False
     return True
 
@@ -85,7 +94,17 @@ def landing_pair(config):
     )
     return [
         Item(x_lat=lat, y_long=lon, z_alt=config.approach_alt),
-        Item(command=21, x_lat=config.land_lat, y_long=config.land_lon, z_alt=config.land_alt),
+        # ArduPlane stores LAND param4 as a direction flag and returns +1 for
+        # nonnegative inputs (AP_Mission::mission_cmd_to_mavlink_int). It is only
+        # used for deep-stall landing; this stack requires LAND_TYPE=0. Send the
+        # canonical value so strict readback and restart matching agree.
+        Item(
+            command=21,
+            param4=1.0,
+            x_lat=config.land_lat,
+            y_long=config.land_lon,
+            z_alt=config.land_alt,
+        ),
     ]
 
 

@@ -9,21 +9,37 @@ net_det:
     min_aspect: 0.8
     max_aspect: 6.0
     max_image_fraction: 0.90
+    # Reject clipped colour blobs whose centroid would not be the net centre.
+    border_margin_px: 2
 net_pos:
   ros__parameters:
     camera_info_topic: /camera/camera_info
     camera_frame: camera_optical_frame
     body_frame: base_link
-    net_width_m: 5.5
-    net_height_m: 2.0
+    local_frame: map
+    mavros_namespace: /mavros
+    # Vertical plane comes from the verified landing plan: land_lat, land_lon,
+    # approach_heading_deg (plane normal), not a constant-altitude plane.
     # Forward-facing camera optical x-right,y-down,z-forward -> body FLU.
     # Replace this rigid transform with YOUR measured camera mounting transform.
     camera_to_body_rotation: [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0]
     camera_translation_body_m: [0.0, 0.0, 0.0]
-    # Net object frame x-right,y-down,z-normal. Zero targets rectangle centre.
-    target_offset_net_m: [0.0, 0.0, 0.0]
     pixel_noise_px: 2.0
-    max_reprojection_px: 4.0
     detection_timeout_s: 0.25
+    telemetry_timeout_s: 1.0
     min_detection_score: 0.5
     max_position_std_m: 2.0
+    # Assumed error budgets; review for actual localization/survey/mounting.
+    attitude_std_deg: 1.0
+    local_position_std_m: 0.5
+    gps_position_std_floor_m: 0.5
+    plane_position_std_m: 0.5
+    plane_heading_std_deg: 1.0
+    min_ray_plane_incidence: 0.2
+    maximum_range_m: 200.0
+    # Stationary-target Kalman filter in local ENU; stale/outlier measurements
+    # never renew image timestamps. The covariance floor limits confidence.
+    filter_process_std_m_sqrt_s: 0.02
+    filter_min_position_std_m: 0.75
+    filter_innovation_gate: 11.345
+    filter_max_jump_m: 3.0

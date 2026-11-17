@@ -1,0 +1,4 @@
+simulator_only: true
+description: Merlin estimated stall 11.3 m/s at 5 kg plus requested 2 m/s margin
+parameters:
+  LAND_PF_ARSPD: 13.3

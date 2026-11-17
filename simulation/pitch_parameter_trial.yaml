@@ -1,0 +1,7 @@
+# Experimental local-SITL trial, not a real-aircraft tune.
+# Geometry, model, TECS, P/D gains and ROS control remain unchanged.
+simulator_only: true
+description: Pitch rate response trial; increase FF and match I to FF
+parameters:
+  PTCH_RATE_FF: 0.6
+  PTCH_RATE_I: 0.6

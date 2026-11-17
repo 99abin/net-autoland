@@ -4,7 +4,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from autoland_interfaces.msg import NetDetection
-from .detector import DetectionConfig, detect_rectangle
+from .detector import DetectionConfig, detect_center
 
 
 class NetDetector(Node):
@@ -19,6 +19,7 @@ class NetDetector(Node):
             min_aspect=0.8,
             max_aspect=6.0,
             max_image_fraction=0.90,
+            border_margin_px=2,
         )
         for k, v in defaults.items():
             self.declare_parameter(k, v)
@@ -40,14 +41,15 @@ class NetDetector(Node):
         msg.header = image.header
         try:
             bgr = self.bridge.imgmsg_to_cv2(image, desired_encoding="bgr8")
-            detection, mask = detect_rectangle(bgr, self.c)
+            msg.image_width, msg.image_height = bgr.shape[1], bgr.shape[0]
+            detection, mask = detect_center(bgr, self.c)
             if detection is not None:
-                corners, msg.score = detection
-                msg.corners = corners.reshape(8).astype(float).tolist()
+                center, msg.score, msg.area_px = detection
+                msg.center_u, msg.center_v = map(float, center)
                 msg.valid = True
-                msg.reason = "Color quadrilateral detected"
+                msg.reason = "Colour-region centre detected"
             else:
-                msg.reason = "No matching blue/purple rectangle"
+                msg.reason = "No acceptable blue/purple centre region"
             if self.mask_pub.get_subscription_count():
                 output = self.bridge.cv2_to_imgmsg(mask, encoding="mono8")
                 output.header = image.header
@@ -66,4 +68,5 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

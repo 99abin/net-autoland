@@ -1,0 +1,10 @@
+# Experimental local-SITL configuration, not a real-aircraft tune.
+# Retain the pitch-gain trial and test the landing airspeed/cap pairing.
+# Existing AIRSPEED_MAX=23, geometry, model and ROS guidance stay unchanged.
+simulator_only: true
+description: Native landing airspeed target with matching LAND_OPTIONS cap
+parameters:
+  PTCH_RATE_FF: 0.6
+  PTCH_RATE_I: 0.6
+  LAND_OPTIONS: 2
+  TECS_LAND_ARSPD: 23.0

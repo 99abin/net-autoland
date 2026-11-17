@@ -13,6 +13,8 @@ class GuidanceConfig:
     minimum_range_m: float = 2.5
     maximum_range_m: float = 100.0
     minimum_ttc_s: float = 0.2
+    terminal_horizon_s: float = .7
+    terminal_roll_limit_deg: float = 5.0
     lateral_gain: float = 2.0
     vertical_gain: float = 0.7
     roll_limit_deg: float = 20.0
@@ -37,6 +39,8 @@ class GuidanceConfig:
                 self.minimum_forward_speed_mps,
                 self.minimum_range_m,
                 self.minimum_ttc_s,
+                self.terminal_horizon_s,
+                self.terminal_roll_limit_deg,
                 self.roll_rate_deg_s,
                 self.pitch_rate_deg_s,
                 self.throttle_slew_s,
@@ -67,7 +71,7 @@ class VisionGuidance:
         self.integral = 0.0
         self.previous = None
 
-    def update(self, target, velocity_body, airspeed, current_roll, current_pitch, dt):
+    def update(self, target, velocity_body, airspeed, current_roll, current_pitch, dt, *, terminal=False):
         c = self.c
         if not finite(*target, *velocity_body, airspeed, current_roll, current_pitch, dt):
             raise ValueError("Non-finite guidance input")
@@ -75,31 +79,33 @@ class VisionGuidance:
             raise ValueError("Invalid controller time step")
         x, y, z = target
         vx, vy, vz = velocity_body
-        if not c.minimum_range_m <= x <= c.maximum_range_m:
+        if not (0 < x <= c.maximum_range_m if terminal else c.minimum_range_m <= x <= c.maximum_range_m):
             raise ValueError("Net outside control range")
         if vx < c.minimum_forward_speed_mps:
             raise ValueError("Insufficient forward velocity")
         if airspeed < c.minimum_airspeed_mps:
             raise ValueError("Airspeed outside operating envelope")
         ttc = x / vx
-        if ttc < c.minimum_ttc_s:
+        if not terminal and ttc < c.minimum_ttc_s:
             raise ValueError("Insufficient interception time")
         # Position of net target relative to constant-velocity crossing point,
         # expressed in current body FLU coordinates (y left, z up).
         ey = y - vy * ttc
         ez = z - vz * ttc
-        a_left = c.lateral_gain * ey / (ttc * ttc)
+        horizon = max(ttc, c.terminal_horizon_s) if terminal else ttc
+        a_left = c.lateral_gain * ey / (horizon * horizon)
+        roll_limit = min(c.roll_limit_deg, c.terminal_roll_limit_deg) if terminal else c.roll_limit_deg
         roll = clip(
             -math.atan2(a_left, 9.80665),
-            -math.radians(c.roll_limit_deg),
-            math.radians(c.roll_limit_deg),
+            -math.radians(roll_limit),
+            math.radians(roll_limit),
         )
         pitch = clip(
-            current_pitch + math.atan2(c.vertical_gain * ez, x),
+            current_pitch + math.atan2(c.vertical_gain * ez, max(x, vx*horizon) if terminal else x),
             math.radians(c.pitch_min_deg),
             math.radians(c.pitch_max_deg),
         )
-        error = c.target_airspeed_mps - airspeed
+        error = 0. if terminal else c.target_airspeed_mps - airspeed
         raw = c.throttle_trim + c.speed_kp * error + c.speed_ki * self.integral
         if (
             c.throttle_min < raw < c.throttle_max
@@ -114,6 +120,8 @@ class VisionGuidance:
             c.throttle_min,
             c.throttle_max,
         )
+        if terminal:
+            thrust = 0.  # Explicit motor-off demand, still slewed until contact.
         if self.previous is None:
             self.previous = (current_roll, current_pitch, c.throttle_trim)
         limits = (

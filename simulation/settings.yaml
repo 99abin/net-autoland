@@ -1,0 +1,10 @@
+# Local simulator paths; the original aircraft and world files are read-only inputs.
+aircraft_directory: ~/td/aircraft_model/merlinv2
+source_world: ~/td/world_model/landing/zephyr_landing.sdf
+ardupilot_binary: ~/ardupilot/build/sitl/bin/arduplane
+ardupilot_plugin_directory: ~/fiachra-26/.simulation/ardupilot_gazebo/build
+qgroundcontrol: ~/Applications/QGroundControl/QGroundControl.AppImage
+ros_domain_id: 37
+gazebo_partition: autoland_merlinv2
+# MAVROS parameter/command services can block; leave workers for state reception.
+mavros_executor_threads: 8

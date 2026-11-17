@@ -18,6 +18,7 @@ from autoland_interfaces.srv import SetControlOwnership
 from .geometry import finite, leg_position, wrap
 from .ros_util import params, retained, recent, stamped_recent, stamp_age, profile_values, run
 from .state_conditions import HandoffConfig, Supervisor, handoff_ready, in_handoff_window
+from .terminal import TerminalConfig, TERMINAL_STATES, commit_ready, net_contact_pair
 
 
 class LandingSupervisor(Node):
@@ -27,6 +28,9 @@ class LandingSupervisor(Node):
             self,
             dict(
                 handoff_enabled=False,
+                terminal_enabled=False,
+                simulation_contact_enabled=False,
+                **TerminalConfig().__dict__,
                 telemetry_timeout_s=1.0,
                 vision_timeout_s=0.25,
                 vision_stable_s=0.5,
@@ -41,6 +45,10 @@ class LandingSupervisor(Node):
         )
         self.config = HandoffConfig(**{k: self.p[k] for k in HandoffConfig.__dataclass_fields__})
         self.config.validate()
+        self.terminal_config = TerminalConfig(**{k: self.p[k] for k in TerminalConfig.__dataclass_fields__})
+        self.terminal_config.validate()
+        self.commit_since = None
+        self.net_contact = False
         self.profile = None
         self.profile_time = None
         self.engine = Supervisor()
@@ -86,6 +94,9 @@ class LandingSupervisor(Node):
         self.create_service(Trigger, "~/abort", self.abort_cb)
         self.create_service(Trigger, "~/confirm_capture", self.capture_cb)
         self.create_timer(0.05, self.tick)
+        if self.p["simulation_contact_enabled"]:
+            from ros_gz_interfaces.msg import Contacts
+            self.create_subscription(Contacts, "/simulation/net_contacts", self.contact_cb, 10)
 
     def profile_cb(self, msg):
         self.profile = msg
@@ -100,8 +111,11 @@ class LandingSupervisor(Node):
         self.times[k] = time.monotonic()
 
     def plan_cb(self, m):
-        if self.plan_locked and (not m.verified or m.plan_id != self.plan_locked):
-            self.engine.abort("Mission changed during landing")
+        if (self.plan_locked and self.engine.state not in ("ABORT", "TERMINAL_FAULT")
+                and (not m.verified or m.plan_id != self.plan_locked)):
+            reason = ("Landing plan invalidated: " + m.reason if not m.verified
+                      else "Mission changed during landing")
+            self.engine.abort(reason)
             self.request("ABORT")
         self.plan = m
         self.times["plan"] = time.monotonic()
@@ -149,6 +163,8 @@ class LandingSupervisor(Node):
             self.plan_locked = None
             self.deadline = None
             self.stable_since = None
+            self.commit_since = None
+            self.net_contact = False
         res.message = "Reset" if res.success else "Reset requires fresh disarmed FCU"
         return res
 
@@ -165,7 +181,7 @@ class LandingSupervisor(Node):
             and recent(self.times.get("velocity"), 1)
             and math.hypot(self.velocity.twist.linear.x, self.velocity.twist.linear.y) < 1
         )
-        res.success = self.engine.state == "VISION_FINAL" and stopped
+        res.success = self.engine.state in ("VISION_FINAL", "NET_CONTACT") and stopped
         if res.success:
             self.engine.state = "COMPLETE"
             self.engine.enabled = False
@@ -176,6 +192,20 @@ class LandingSupervisor(Node):
             else "Need VISION_FINAL and fresh ground speed below 1 m/s"
         )
         return res
+
+    def contact_cb(self, message):
+        if (not self.p["simulation_contact_enabled"] or not self.engine.terminal_committed
+                or self.engine.state not in ("TERMINAL_COMMITTED", "TERMINAL_FAULT", "MISSED_NET")
+                or not self.fcu or not self.fcu.armed or self.fcu.mode != "GUIDED"
+                or not recent(self.times.get("fcu"), 3)
+                or not 0 <= stamp_age(self, message.header.stamp) <= .25):
+            return
+        if any(net_contact_pair(contact.collision1.name, contact.collision2.name)
+               for contact in message.contacts):
+            self.net_contact = True
+            self.engine.state = "NET_CONTACT"
+            self.engine.enabled = False
+            self.engine.reason = "Simulator net contact observed; zero thrust; capture unconfirmed"
 
     def request(self, owner):
         if not self.client.service_is_ready():
@@ -210,10 +240,22 @@ class LandingSupervisor(Node):
         )
 
     def vision_ready(self):
+        target_ok = (
+            stamped_recent(self, self.preview, self.times.get("preview"), self.p["vision_timeout_s"])
+            and self.preview.valid
+            and self.preview.plan_id == self.plan_locked
+            and math.isfinite(self.preview.target_age_s)
+            and self.preview.target_age_s >= 0
+        )
+        if self.engine.state in ("HANDOFF_PENDING", "VISION_FINAL", *TERMINAL_STATES):
+            # After authorization the controller may track a retained static
+            # target. Raw detector jitter must not abort a healthy command stream.
+            return target_ok
         m = self.net
         ok = (
             stamped_recent(self, m, self.times.get("net"), self.p["vision_timeout_s"])
             and m.valid
+            and m.plan_id == self.plan_locked
             and m.header.frame_id == self.p["body_frame"]
             and m.score >= self.p["min_vision_score"]
             and all(
@@ -227,18 +269,12 @@ class LandingSupervisor(Node):
             return False
         if self.stable_since is None:
             self.stable_since = time.monotonic()
-        target_ok = (
-            stamped_recent(
-                self, self.preview, self.times.get("preview"), self.p["vision_timeout_s"]
-            )
-            and self.preview.valid
-            and self.preview.plan_id == self.plan_locked
-        )
-        return target_ok and time.monotonic() - self.stable_since >= self.p["vision_stable_s"]
+        return (target_ok and not self.preview.target_held
+                and time.monotonic() - self.stable_since >= self.p["vision_stable_s"])
 
     def tick(self):
         ready = False
-        missed_window = False
+        handoff_window = False
         telemetry = self.telemetry_ok()
         vision = self.vision_ready()
         if telemetry and self.verified():
@@ -254,7 +290,7 @@ class LandingSupervisor(Node):
                     self.gps.longitude,
                 )
                 track = math.atan2(v.x, v.y)
-                missed_window = in_handoff_window(
+                handoff_window = in_handoff_window(
                     self.config, self.alt - p.land_alt, -v.z, progress
                 )
                 ready = handoff_ready(
@@ -279,12 +315,33 @@ class LandingSupervisor(Node):
             ready=ready,
             allow_handoff=self.p["handoff_enabled"],
             owned=owned,
-            missed_window=missed_window,
+            handoff_window=handoff_window,
         )
         if action:
             self.request(action)
-        if self.engine.state in ("HANDOFF_PENDING", "VISION_FINAL") and not vision:
-            self.engine.abort("Vision or control target unavailable")
+        if self.engine.state == "VISION_FINAL" and self.p["terminal_enabled"]:
+            m = self.preview
+            acceptable = (vision and m.terminal_ready and not m.terminal_mode
+                and commit_ready(self.terminal_config, m.time_to_target_s,
+                    m.crossing_error_y_m, m.crossing_error_z_m,
+                    m.position_std_y_m, m.position_std_z_m, m.target_age_s))
+            if acceptable:
+                if self.commit_since is None:
+                    self.commit_since = time.monotonic()
+                if time.monotonic()-self.commit_since >= self.p["terminal_commit_stable_s"]:
+                    self.engine.commit()
+            else:
+                self.commit_since = None
+            if (self.engine.state == "VISION_FINAL" and m is not None and m.valid
+                    and 0 < m.time_to_target_s <= self.p["terminal_decision_ttc_s"]):
+                self.engine.abort("Terminal commitment rejected before decision boundary")
+                self.request("ABORT")
+        if self.engine.state == "TERMINAL_COMMITTED" and self.preview is not None and self.preview.target_passed:
+            self.engine.state = "MISSED_NET"
+            self.engine.enabled = False
+            self.engine.reason = "Target plane passed without observed contact; zero-thrust direction hold"
+        if self.engine.state in ("HANDOFF_PENDING", "VISION_FINAL", "TERMINAL_COMMITTED") and not vision:
+            self.engine.abort("Control target unavailable (including retained net target)")
             self.request("ABORT")
         if (
             self.engine.state == "HANDOFF_PENDING"
@@ -309,6 +366,8 @@ class LandingSupervisor(Node):
         msg = LandingStatus()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.state = self.engine.state
+        msg.monitoring_enabled = self.engine.enabled
+        msg.net_contact = self.net_contact
         msg.control_owner = "VISION" if owned else "ARDUPILOT"
         msg.plan_id = self.plan_locked or (self.plan.plan_id if self.plan else "")
         msg.parameter_profile_id = self.profile.profile_id if self.profile else ""

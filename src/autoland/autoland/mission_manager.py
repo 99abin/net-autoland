@@ -65,7 +65,9 @@ class MissionManager(Node):
             and (not self.profile_ok() or msg.profile_id != self.plan.parameter_profile_id)
         ):
             self.expected = None
-            self.invalidate("FCU parameter profile changed; prepare again")
+            reason = ("FCU parameter profile unavailable: " + msg.reason if not msg.verified
+                      else "FCU parameter profile changed; prepare again")
+            self.invalidate(reason)
 
     def profile_ok(self):
         return profile_values(self, self.profile, self.profile_time) is not None

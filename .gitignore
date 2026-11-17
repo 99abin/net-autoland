@@ -10,3 +10,4 @@ dist/
 build_handoff/
 install_handoff/
 log_handoff/
+.simulation/
