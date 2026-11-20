@@ -8,3 +8,12 @@ ros_domain_id: 37
 gazebo_partition: autoland_merlinv2
 # MAVROS parameter/command services can block; leave workers for state reception.
 mavros_executor_threads: 8
+
+# Explicit full-autoland SITL experiment; normal tools/run.sh stays unchanged.
+control_config: simulation/control_zero_minimum.yaml
+
+# Wind toward south follows the southbound (180 degree) net approach.
+wind_enu_mps: [0.0, -4.0, 0.0]
+
+# Short-base-route trial profile; its preparation margin is independent of wind direction.
+mission_config: simulation/mission_headwind.yaml

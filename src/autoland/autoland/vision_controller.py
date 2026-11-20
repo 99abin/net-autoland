@@ -10,11 +10,14 @@ from .geometry import quaternion_euler, inverse_rotate, interpolate_pose, rotate
 from .vision_guidance import GuidanceConfig, VisionGuidance
 from .terminal import TerminalConfig, TERMINAL_STATES, ZERO_THRUST_STATES, crossing, commit_ready
 from .ros_util import params, retained, recent, stamped_recent, run
+from .timing_diagnostics import TimingRecorder
 
 
 class VisionController(Node):
     def __init__(self):
         super().__init__("vision_controller")
+        self.timing = TimingRecorder(self)
+        trace = self.timing.wrap
         self.p = params(
             self,
             dict(
@@ -51,10 +54,10 @@ class VisionController(Node):
         ns = self.p["mavros_namespace"].rstrip("/")
         self.pub = self.create_publisher(ControlSetpoint, "/autoland/control_setpoint", 10)
         self.create_subscription(
-            LandingStatus, "/autoland/status", lambda m: self.save("status", m), retained()
+            LandingStatus, "/autoland/status", trace("status", lambda m: self.save("status", m)), retained()
         )
         self.create_subscription(
-            NetEstimate, "/autoland/net_estimate", lambda m: self.save("net", m), 10
+            NetEstimate, "/autoland/net_estimate", trace("net", lambda m: self.save("net", m)), 10
         )
         for typ, topic, key in [
             (PoseStamped, "/local_position/pose", "pose"),
@@ -62,9 +65,14 @@ class VisionController(Node):
             (VfrHud, "/vfr_hud", "air"),
         ]:
             self.create_subscription(
-                typ, ns + topic, lambda m, k=key: self.save(k, m), qos_profile_sensor_data
+                typ, ns + topic, trace(key, lambda m, k=key: self.save(k, m)), qos_profile_sensor_data
             )
-        self.create_timer(0.05, self.tick)
+        self.create_timer(0.05, trace("tick", self.tick))
+
+    def publish(self, output):
+        self.timing.command("command_publish_begin", output)
+        self.pub.publish(output)
+        self.timing.command("command_publish_end", output)
 
     def clear_target(self):
         self.target_world = None
@@ -186,7 +194,7 @@ class VisionController(Node):
                 output.yaw_enu_rad, output.thrust = self.last_yaw, 0.
                 output.valid = True
                 output.reason = "Terminal zero-thrust hold; operator/capture handling required"
-                self.pub.publish(output)
+                self.publish(output)
                 return
             for key in ("pose", "velocity", "air"):
                 if not recent(self.times.get(key), self.p["telemetry_timeout_s"]):
@@ -221,7 +229,7 @@ class VisionController(Node):
                 output.thrust, output.yaw_enu_rad = 0., self.last_yaw
                 output.valid = True
                 output.reason = "Target plane passed; holding direction with zero thrust"
-                self.pub.publish(output)
+                self.publish(output)
                 return
             (output.roll_rad, output.pitch_rad, output.thrust), _, _ = self.guidance.update(
                 target, body_v, self.air.airspeed, roll, -pitch_ros, dt, terminal=terminal
@@ -239,7 +247,7 @@ class VisionController(Node):
         except ValueError as exc:
             self.guidance.reset()
             output.reason = str(exc)
-        self.pub.publish(output)
+        self.publish(output)
 
 
 def main(args=None):

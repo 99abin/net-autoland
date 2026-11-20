@@ -1,0 +1,4 @@
+simulator_only: true
+description: Requested 0.2 s pitch response trial, below documented 0.4 s minimum
+parameters:
+  PTCH2SRV_TCONST: 0.2

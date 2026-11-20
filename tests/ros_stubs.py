@@ -32,6 +32,11 @@ Pose = message("Pose", {"position": Vector3, "orientation": Quaternion})
 PoseStamped = message("PoseStamped", {"header": Header, "pose": Pose})
 Twist = message("Twist", {"linear": Vector3, "angular": Vector3})
 TwistStamped = message("TwistStamped", {"header": Header, "twist": Twist})
+TwistWithCovarianceStamped = message('TwistWithCovarianceStamped', {'header':Header,
+    'twist':lambda:NS(twist=Twist(),covariance=[0.]*36)})
+Mavlink = message('Mavlink', {'header':Header,**{k:int for k in
+    ('framing_status','magic','len','incompat_flags','compat_flags','seq','sysid','compid','msgid','checksum')},
+    'payload64':list})
 String = message("String", {"data": str})
 Float64 = message("Float64", {"data": float})
 State = message("State", {"header": Header, "connected": bool, "armed": bool, "mode": str})
@@ -47,7 +52,7 @@ NavSatFix = message(
         "status": lambda: NS(status=0),
     },
 )
-VfrHud = message("VfrHud", {"header": Header, "airspeed": float, "groundspeed": float})
+VfrHud = message("VfrHud", {"header": Header, "airspeed": float, "groundspeed": float, "altitude": float})
 Waypoint = message(
     "Waypoint",
     {
@@ -241,9 +246,9 @@ def install():
     sys.modules["rclpy.qos"].qos_profile_sensor_data = object()
     maps = {
         "sensor_msgs.msg": ["NavSatFix", "CameraInfo", "Image"],
-        "geometry_msgs.msg": ["PoseStamped", "TwistStamped"],
+        "geometry_msgs.msg": ["PoseStamped", "TwistStamped",'TwistWithCovarianceStamped'],
         "std_msgs.msg": ["String", "Float64"],
-        "mavros_msgs.msg": ["State", "Waypoint", "WaypointList", "VfrHud", "AttitudeTarget"],
+        "mavros_msgs.msg": ["State", "Waypoint", "WaypointList", "VfrHud", "AttitudeTarget",'Mavlink'],
     }
     for module, names in maps.items():
         for name in names:

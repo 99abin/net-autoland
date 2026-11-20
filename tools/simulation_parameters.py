@@ -10,8 +10,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 LIMITS = {"PTCH_RATE_FF": (.05, 3.), "PTCH_RATE_I": (.01, .6),
           "PTCH_RATE_P": (0., .35), "PTCH_RATE_D": (0., .03),
-          "PTCH2SRV_TCONST": (.4, 1.), "LAND_OPTIONS": (0, 2147483647),
-          "TECS_LAND_ARSPD": (-1, 30), "LAND_PF_ARSPD": (0, 30)}
+          "PTCH2SRV_TCONST": (.2, 1.2), "LAND_OPTIONS": (0, 2147483647),
+          "TECS_LAND_ARSPD": (-1, 30), "LAND_PF_ARSPD": (0, 30),
+          "TECS_LAND_SPDWGT": (-1, 2)}
 
 
 def load_trial(path):

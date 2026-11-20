@@ -201,3 +201,49 @@ already had the trial pitch gains). Apply the earlier pitch baseline as well to
 restore the original FF/I values. Backups and action/readback records are in
 `.simulation/parameter_trials/`. Failed/partial writes are recorded and are not
 silently rolled back.
+
+## Airspeed-priority comparison (2026-11-18)
+
+The current simulator profile explicitly sets `TECS_LAND_SPDWGT=2.0`, replacing
+the previous native `-1.0` scaling toward height priority near LAND. This gives
+airspeed maximum pitch priority during native AUTO landing. It does not change
+the custom ROS guidance after GUIDED takeover and does not establish a suitable
+landing tune. A flatter descent or height overshoot is possible.
+
+Only that native value was written. The targets remain `TECS_LAND_ARSPD=15.0`
+and `LAND_PF_ARSPD=13.3`, with a 50 m / 500 m approach. Original values are backed
+up in `.simulation/parameter_trials/20261118-152756-6616/baseline.yaml`.
+The repeatable trial is `simulation/airspeed_priority_parameter_trial.yaml`;
+`simulation/fc_parameters.yaml` also explicitly expects the new weighting.
+The guarded parameter helper accepts its firmware range, -1 through 2, and
+rejects values outside it. All 152 Python tests passed.
+
+Run `20261118-152836-6810` was interrupted by an agent-service restart shortly
+after takeoff. The simulator and observer stopped; no landing conclusion can be
+drawn from it. The repeat uses detached simulator/test processes to keep their
+lifetime independent of the tool connection.
+
+Repeat `20261118-153218-8542` completed takeoff and the mission. The FCU DataFlash
+log `00000016.BIN` confirms the new weighting and records speed weighting 1 /
+height weighting 0 internally (after TECS normalizes its weights). At the net
+plane, interpolated ROS local-position/airspeed data gives 15.00 m/s and 10.61 m
+above the net centre, cross-track -0.15 m. Airspeed over the final 100 m before
+the net was 14.999–15.004 m/s. Native flare was logged at 176.919 s, 10.6 m above
+the landing reference, near the net position. No PREFLARE stage was logged
+before it: the aircraft remained too high for that trigger before crossing.
+
+There were 35 valid net estimates and 54 valid controller previews, but none
+coincided with the handoff height/time window. It remained in AUTO; no live ROS
+commands or net contact occurred. It stopped on the ground at ENU approximately
+(0.064, -153.063, 0.09), about 103 m beyond the net. The FCU log records native
+auto-disarm at 208.519 s. The Gazebo GUI then exited normally, causing managed
+SITL shutdown; the observer ended with a simulator-not-alive error before it
+received the final disarmed ROS state. No software capture confirmation was made.
+
+Compared with the previous 19.56 m/s precontact reading, approach speed control
+improved, but the net was missed high. Full speed priority is not a completed
+landing tune. Evidence: `.simulation/analysis/airspeed_priority_result.json`,
+`.simulation/analysis/airspeed_priority_comparison.png`, the run's telemetry,
+and `.simulation/sitl/logs/00000016.BIN`. All 152 Python tests passed; ordinary
+preview flags, the early handoff, geometry, PID gains and ROS controller were
+unchanged in this comparison.

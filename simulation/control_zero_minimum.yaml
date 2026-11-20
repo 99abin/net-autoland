@@ -1,0 +1,99 @@
+# SITL ONLY: experimental override; normal configuration retains 10 m/s.
+landing_supervisor:
+  ros__parameters:
+    handoff_enabled: false
+    terminal_enabled: false
+    simulation_contact_enabled: false
+    # Prototype centre-crossing gates, not certified full-airframe clearance.
+    terminal_commit_ttc_s: 2.0
+    terminal_decision_ttc_s: 1.0
+    terminal_commit_stable_s: 0.15
+    terminal_target_age_s: 0.25
+    terminal_max_position_std_m: 1.0
+    terminal_net_half_width_m: 2.75
+    terminal_net_half_height_m: 1.0
+    terminal_opening_margin_m: 0.1
+    mavros_namespace: /mavros
+    local_frame: map
+    body_frame: base_link
+    telemetry_timeout_s: 1.0
+    vision_timeout_s: 0.25
+    vision_stable_s: 0.5
+    min_vision_score: 0.5
+    max_position_std_m: 2.0
+    handoff_timeout_s: 3.0
+    # Native flare_alt/time are read from the verified FCU parameter profile.
+    handoff_margin_m: 1.5
+    handoff_margin_s: 0.5
+    max_cross_track_m: 5.0
+    max_track_error_deg: 15.0
+    min_net_range_m: 8.0
+    max_net_range_m: 80.0
+vision_controller:
+  ros__parameters:
+    terminal_enabled: false
+    # Keep these gates consistent with landing_supervisor above.
+    terminal_commit_ttc_s: 2.0
+    terminal_decision_ttc_s: 1.0
+    terminal_commit_stable_s: 0.15
+    terminal_target_age_s: 0.25
+    terminal_max_position_std_m: 1.0
+    terminal_net_half_width_m: 2.75
+    terminal_net_half_height_m: 1.0
+    terminal_opening_margin_m: 0.1
+    terminal_horizon_s: 0.7
+    terminal_roll_limit_deg: 5.0
+    mavros_namespace: /mavros
+    local_frame: map
+    body_frame: base_link
+    vision_timeout_s: 0.25
+    # After handoff, guide to the last accepted stationary net position through
+    # detection gaps. 0 = no age expiry; >0 limits wall AND image age in seconds.
+    # Does not permit cached targets to initiate handoff or bypass other guards.
+    target_hold_timeout_s: 0.0
+    telemetry_timeout_s: 0.5
+    min_vision_score: 0.5
+    max_position_std_m: 2.0
+    # Experimental SITL starting values, NOT an aircraft-specific tune.
+    # Merlin SITL: estimated stall 11.3 m/s at 5 kg + requested 2 m/s margin.
+    # Analytical model estimate, not a measured aircraft stall speed.
+    target_airspeed_mps: 13.3
+    minimum_airspeed_mps: 0.0  # SITL experiment: bypass the ROS airspeed floor
+    minimum_forward_speed_mps: 5.0
+    minimum_range_m: 2.5
+    maximum_range_m: 100.0
+    minimum_ttc_s: 0.2
+    lateral_gain: 2.0
+    vertical_gain: 1.4
+    roll_limit_deg: 20.0
+    pitch_min_deg: -8.0
+    pitch_max_deg: 12.0
+    roll_rate_deg_s: 20.0
+    pitch_rate_deg_s: 12.0
+    throttle_trim: 0.4
+    throttle_min: 0.15
+    throttle_max: 0.7
+    throttle_slew_s: 0.3
+    speed_kp: 0.04
+    speed_ki: 0.01
+fcu_interface:
+  ros__parameters:
+    live_output: false
+    terminal_enabled: false
+    terminal_roll_limit_deg: 5.0
+    # ArduPlane uses an axis-selective quaternion interpretation that differs
+    # from generic MAVLink. Set true only after verifying mask 132 in YOUR SITL.
+    partial_attitude_verified: false
+    mavros_namespace: /mavros
+    local_frame: map
+    abort_mode: RTL
+    status_timeout_s: 0.3
+    command_timeout_s: 0.2
+    mode_timeout_s: 3.0
+    roll_limit_deg: 20.0
+    pitch_min_deg: -8.0
+    pitch_max_deg: 12.0
+    throttle_min: 0.15
+    throttle_max: 0.7
+    maximum_roll_step_deg: 15.0
+    maximum_pitch_step_deg: 12.0

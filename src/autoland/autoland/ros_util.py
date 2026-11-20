@@ -45,6 +45,9 @@ def run(factory, args=None):
         pass
     finally:
         if node is not None:
+            timing = getattr(node, "timing", None)
+            if timing is not None:
+                timing.close()
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
@@ -65,3 +68,17 @@ def profile_values(node, status, received):
         return values
     except (ValueError, TypeError):
         return None
+
+
+def reordered_profile_heartbeat(node, incoming, current, received):
+    """Drop only an identical heartbeat arriving just before its /clock tick.
+
+    Independent DDS topics have no cross-topic ordering. Keep the preceding
+    strictly fresh lease; never accept a future-dated status, extend the old
+    receipt time, or suppress changed/invalid profile content.
+    """
+    age=stamp_age(node,incoming.header.stamp)
+    return (current is not None and incoming.verified and current.verified
+        and incoming.profile_id==current.profile_id
+        and incoming.parameters_json==current.parameters_json
+        and -.05<=age<0 and profile_values(node,current,received) is not None)

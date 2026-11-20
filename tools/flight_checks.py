@@ -28,10 +28,11 @@ def validate_assist_config(config):
             raise ValueError(f"Invalid simulator launch setting: {name}")
 
 
-def launch_blockers(snapshot, now, full_autoland=False):
+def launch_blockers(snapshot, now, full_autoland=False, airborne_preparation=False):
     reasons = []
     for name, age_limit in (("state", 3), ("pose", 1), ("velocity", 1),
                             ("altitude", 1), ("profile", 3), ("plan", 3)):
+        if airborne_preparation and name=='plan':continue
         age = now - snapshot.get(name + "_received", -1e30)
         if not 0 <= age <= age_limit:
             reasons.append(f"{name} is missing or stale")
@@ -43,25 +44,35 @@ def launch_blockers(snapshot, now, full_autoland=False):
         reasons.append("operator must select AUTO in QGC")
     if snapshot.get("current_command") != 22:
         reasons.append("NAV_TAKEOFF must be the active mission command")
-    if not snapshot.get("profile_verified") or not snapshot.get("plan_verified"):
+    if not snapshot.get("profile_verified") or (not airborne_preparation and not snapshot.get("plan_verified")):
         reasons.append("parameter profile and landing plan must be verified")
     for name in ("profile", "plan"):
+        if airborne_preparation and name=='plan':continue
         age = snapshot.get(name + "_stamp_age_s", math.inf)
         if not math.isfinite(age) or not 0 <= age <= 3:
             reasons.append(f"{name} simulation-time lease is missing or stale")
-    if not snapshot.get("profile_id") or snapshot.get("profile_id") != snapshot.get("plan_profile_id"):
+    if not snapshot.get("profile_id") or (not airborne_preparation and snapshot.get("profile_id") != snapshot.get("plan_profile_id")):
         reasons.append("landing plan must reference the current verified profile")
-    if not snapshot.get("mission_matches"):
+    if not airborne_preparation and not snapshot.get("mission_matches"):
         reasons.append("current FCU mission must match the verified landing plan")
     if full_autoland:
         if not all(snapshot.get(k) is True for k in (
                 "live_output", "handoff_enabled", "partial_attitude_verified")):
             reasons.append("full autoland requires all three verified handoff/output flags")
-        if snapshot.get("supervisor_state") != "MISSION_READY":
+        if airborne_preparation:
+            if (snapshot.get('airborne_preparation_enabled') is not True
+                    or snapshot.get('fcu_airborne_preparation_enabled') is not True
+                    or snapshot.get('preparation_state')!='BASE_READY'
+                    or not snapshot.get('base_matches')
+                    or snapshot.get('base_profile_id')!=snapshot.get('profile_id')
+                    or not 0<=now-snapshot.get('preparation_received',-1e30)<=3
+                    or not 0<=snapshot.get('preparation_stamp_age_s',math.inf)<=3):
+                reasons.append('Need fresh verified unchanged airborne base mission and preparation/recovery flags')
+        elif snapshot.get("supervisor_state") != "MISSION_READY":
             reasons.append("enable the supervisor before takeoff; MISSION_READY required")
-        if snapshot.get("supervisor_enabled") is not True:
+        if not airborne_preparation and snapshot.get("supervisor_enabled") is not True:
             reasons.append("call /landing_supervisor/enable before takeoff")
-        if not snapshot.get("supervisor_fresh"):
+        if not airborne_preparation and not snapshot.get("supervisor_fresh"):
             reasons.append("supervisor readiness is missing or stale")
     elif snapshot.get("live_output") is not False or snapshot.get("handoff_enabled") is not False:
         reasons.append("native AUTO test requires live_output=false and handoff_enabled=false")

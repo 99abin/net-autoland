@@ -66,8 +66,8 @@ class FlightObserver:
         import rclpy
         from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
         from mavros_msgs.msg import State as FCUState, WaypointList, VfrHud
-        from geometry_msgs.msg import PoseStamped, TwistStamped
-        from sensor_msgs.msg import NavSatFix
+        from geometry_msgs.msg import PoseStamped, TwistStamped, TwistWithCovarianceStamped
+        from sensor_msgs.msg import NavSatFix, CameraInfo
         from std_msgs.msg import Float64, String
         from autoland_interfaces.msg import (
             ParameterProfileStatus, LandingPlan, LandingStatus, NetDetection,
@@ -83,6 +83,9 @@ class FlightObserver:
         self.supervisor_states = set()
         self.live_command_count = 0
         self.held_target_command_count = 0
+        self.zero_thrust_count = 0
+        self.close_terminal_command_count = 0
+        self.net_contact_observed = False
         self.received = {}
         self.file = None
         self.started = time.monotonic()
@@ -100,17 +103,20 @@ class FlightObserver:
         self.subscriptions = []
         retained = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         topics = [
+            ("camera_info", CameraInfo, "/camera/camera_info", qos_profile_sensor_data),
             ("state", FCUState, "/mavros/state", 10),
             ("mission", WaypointList, "/mavros/mission/waypoints", retained),
             ("pose", PoseStamped, "/mavros/local_position/pose", qos_profile_sensor_data),
             ("velocity", TwistStamped, "/simulation/velocity_local_enu", qos_profile_sensor_data),
             ("altitude", Float64, "/mavros/global_position/rel_alt", qos_profile_sensor_data),
             ("gps", NavSatFix, "/mavros/global_position/global", qos_profile_sensor_data),
+            ("wind", TwistWithCovarianceStamped, "/mavros/wind_estimation", qos_profile_sensor_data),
             ("airspeed", VfrHud, "/mavros/vfr_hud", qos_profile_sensor_data),
             ("profile", ParameterProfileStatus, "/autoland/parameter_profile", retained),
             ("plan", LandingPlan, "/autoland/landing_plan", retained),
             ("supervisor", LandingStatus, "/autoland/status", retained),
             ("ownership", String, "/autoland/control_ownership", 10),
+            ("preparation", String, "/autoland/airborne_preparation", retained),
             ("detection", NetDetection, "/autoland/net_detection", 10),
             ("estimate", NetEstimate, "/autoland/net_estimate", 10),
             ("preview", ControlSetpoint, "/autoland/control_setpoint", 10),
@@ -120,6 +126,11 @@ class FlightObserver:
         for name, typ, topic, qos in topics:
             self.subscriptions.append(self.node.create_subscription(
                 typ, topic, lambda msg, key=name: self.receive(key, msg), qos))
+        from mavros_msgs.msg import Mavlink
+        for key,topic in (('mission_tx','/uas1/mavlink_sink'),('mission_rx','/uas1/mavlink_source')):
+            self.subscriptions.append(self.node.create_subscription(Mavlink,topic,
+                lambda msg,key=key:self.receive(key,msg) if msg.msgid in (30,36,38,39,40,41,44,45,47,51,62,65,73,74,82,83,194) else None,
+                qos_profile_sensor_data))
 
     def receive(self, key, message):
         now = time.monotonic()
@@ -137,14 +148,21 @@ class FlightObserver:
                     self.faults.add("GUIDED observed during native AUTO-only test")
         elif key == "supervisor":
             self.supervisor_states.add(message.state)
-            if message.state == "ABORT":
-                self.faults.add("Supervisor ABORT: " + message.reason)
+            self.net_contact_observed |= message.net_contact
+            if message.state in ("ABORT", "TERMINAL_FAULT", "MISSED_NET"):
+                self.faults.add("Supervisor " + message.state + ": " + message.reason)
         elif key == "ownership" and message.data == "VISION":
             self.vision_owner_observed = True
-        elif key == "preview" and message.valid and message.target_held:
-            self.held_target_command_count += 1
+        elif key == "preview" and message.valid:
+            if message.target_held:
+                self.held_target_command_count += 1
+            if (message.terminal_mode and message.forward_range_m > 0
+                    and (message.forward_range_m < 2.5 or message.time_to_target_s < .2)):
+                self.close_terminal_command_count += 1
         elif key == "live_attitude":
             self.live_command_count += 1
+            if message.thrust == 0:
+                self.zero_thrust_count += 1
         elif key == "mission":
             self.sequences.add(message.current_seq)
             state = self.messages.get("state")
@@ -176,7 +194,8 @@ class FlightObserver:
     def flags(self):
         from rcl_interfaces.srv import GetParameters
         values = {}
-        for name, keys in (("fcu_interface", ["live_output", "partial_attitude_verified"]),
+        for name, keys in (("fcu_interface", ["live_output", "partial_attitude_verified", "airborne_preparation_enabled"]),
+                           ("mission_manager", ["airborne_preparation_enabled"]),
                            ("landing_supervisor", ["handoff_enabled"])):
             client = self.node.create_client(GetParameters, f"/{name}/get_parameters")
             try:
@@ -189,7 +208,7 @@ class FlightObserver:
                 if future.done() and future.result():
                     for key, value in zip(keys, future.result().values):
                         if value.type == 1:
-                            values[key] = value.bool_value
+                            values['fcu_airborne_preparation_enabled' if name=='fcu_interface' and key=='airborne_preparation_enabled' else key] = value.bool_value
             finally:
                 self.node.destroy_client(client)
         return values
@@ -204,7 +223,7 @@ class FlightObserver:
             req = GetParameters.Request()
             req.names = ["TKOFF_THR_MINACC", "TKOFF_THR_MINSPD", "TKOFF_THR_DELAY",
                          "TKOFF_ACCEL_CNT", "TKOFF_THR_MAX", "AIRSPEED_MIN",
-                         "AIRSPEED_CRUISE", "SCALING_SPEED", "TECS_LAND_SPDWGT",
+                         "AIRSPEED_CRUISE", "SCALING_SPEED", "AHRS_EKF_TYPE", "ARSPD_TYPE", "TECS_LAND_SPDWGT",
                          "TECS_LAND_ARSPD", "TECS_APPR_SMAX", "LAND_OPTIONS",
                          "PTCH_RATE_FF", "PTCH_RATE_I", "PTCH_RATE_P", "PTCH_RATE_D"]
             future = client.call_async(req)
@@ -221,6 +240,16 @@ class FlightObserver:
         from autoland.mission_builder import LandingConfig, landing_pair, same_mission
         m = self.messages
         result = {key + "_received": value for key, value in self.received.items()}
+        if 'preparation' in m:
+            try:
+                from autoland.mission_builder import fingerprint
+                p=json.loads(m['preparation'].data)
+                result.update(preparation_state=p['state'],base_profile_id=p['profile_id'],
+                    base_matches=(p['base_verified'] and 'mission' in m
+                        and fingerprint(m['mission'].waypoints)==p['base_id']),
+                    preparation_stamp_age_s=self.node.get_clock().now().nanoseconds/1e9-p['stamp_s'])
+            except (ValueError,KeyError,TypeError):
+                result['base_matches']=False
         result.update(flags)
         result.update(plugin_ready=status.get("ready", False))
         if "state" in m:
@@ -272,6 +301,8 @@ class FlightObserver:
         directory = STATE / "flight_runs" / (time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}")
         directory.mkdir(parents=True)
         self.file = (directory / "telemetry.jsonl").open("w", buffering=1)
+        from capture_diagnostics import log_inventory
+        (directory / "native_log_inventory_before.json").write_text(json.dumps(log_inventory(), indent=2))
         session = json.loads((STATE / "active.json").read_text())
         files = [ROOT / "simulation/launch_assist.yaml", ROOT / "src/start/config/mission.yaml",
                  ROOT / "src/start/config/control.yaml", STATE / "geometry.json",
@@ -282,6 +313,23 @@ class FlightObserver:
                  ROOT / "src/perception/perception/ray_estimation.py",
                  ROOT / "src/autoland_interfaces/msg/NetDetection.msg",
                  ROOT / "src/autoland_interfaces/msg/NetEstimate.msg"]
+        files.extend(ROOT/'src/autoland/autoland'/name for name in
+            ('adaptive_approach.py','alignment_planner.py','airborne_preparation.py','mission_partial.py',
+             'fcu_interface.py','vision_controller.py','landing_supervisor.py','timing_diagnostics.py','ros_util.py'))
+        files.extend(ROOT/'tools'/name for name in
+                     ('simulation_auto.py','analyse_command_timing.py','ros_env.sh'))
+        files.append(ROOT/'simulation/settings.yaml')
+        files.append(STATE/'merlin_landing.sdf')
+        files.append(ROOT/'tools/simulation_wind.py')
+        if any(__import__('yaml').safe_load((ROOT/'simulation/settings.yaml').read_text()).get('wind_enu_mps',[])):
+            files.append(STATE/'models/merlinv2/model.sdf')
+        cfg=yaml.safe_load((ROOT/'simulation/settings.yaml').read_text())
+        if cfg.get('mission_config'):
+            mission_override=Path(cfg['mission_config']).expanduser()
+            files.append(mission_override if mission_override.is_absolute() else ROOT/mission_override)
+        if cfg.get('control_config'):
+            override=Path(cfg['control_config']).expanduser()
+            files.append(override if override.is_absolute() else ROOT/override)
         context = {"session": session, "files": {}}
         native_trial = STATE / "active_native_parameter_trial.json"
         if native_trial.exists():
@@ -315,6 +363,10 @@ class FlightObserver:
             supervisor_states_observed=sorted(self.supervisor_states),
             live_attitude_message_count=self.live_command_count,
             held_target_preview_count=self.held_target_command_count,
+            terminal_committed_observed="TERMINAL_COMMITTED" in self.supervisor_states,
+            net_contact_observed=self.net_contact_observed,
+            zero_thrust_message_count=self.zero_thrust_count,
+            close_terminal_preview_count=self.close_terminal_command_count,
             armed_auto_observed=self.armed_auto, takeoff_completion_observed=takeoff,
             native_land_item_observed=self.land_index is not None and self.land_index in self.auto_sequences,
             maximum_relative_altitude_m=max_alt,

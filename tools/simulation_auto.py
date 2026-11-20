@@ -18,6 +18,7 @@ from simulation_flight import FlightObserver, managed_session, plugin_status, ga
 ROOT = Path(__file__).resolve().parents[1]
 TAKEOFF = {"TKOFF_THR_MINACC": 15., "TKOFF_THR_MINSPD": 0.,
            "TKOFF_THR_DELAY": 2, "TKOFF_ACCEL_CNT": 1}
+TERMINAL_PHASES = {"TERMINAL_COMMITTED", "NET_CONTACT", "MISSED_NET", "TERMINAL_FAULT"}
 
 
 def preserve_native_fallback(outcome, mode, phases):
@@ -46,6 +47,7 @@ def run(config, args):
     from rclpy.executors import ExternalShutdownException
 
     observer = FlightObserver(full_autoland=True)
+    airborne_preparation=getattr(args,'airborne_preparation',False)
     directory = observer.begin_recording()
     app = None
     log = (directory / "application.log").open("w")
@@ -147,11 +149,23 @@ def run(config, args):
                for k, v in TAKEOFF.items()):
             raise RuntimeError("Native simulator experiment profile readback mismatch")
         (directory / "native_takeoff_parameters.json").write_text(json.dumps(actual, indent=2) + "\n")
-        app = subprocess.Popen(["bash", "tools/sim.sh", "autoland", "--upload-mission"],
+        app_command=["bash", "tools/sim.sh", "autoland", "--upload-mission"]
+        if airborne_preparation:app_command.append('--airborne-preparation')
+        app_env = os.environ.copy()
+        app_env["AUTOLAND_TIMING_DIRECTORY"] = str(directory / "timing")
+        app = subprocess.Popen(app_command, env=app_env,
                                cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         save_action("application_pid", app.pid)
-        wait_for(lambda: all(observer.messages.get(k) is not None and observer.messages[k].verified
-                             for k in ("profile", "plan")), 100, "verified parameter profile and landing plan")
+        def prepared():
+            if not observer.messages.get('profile') or not observer.messages['profile'].verified:return False
+            if not airborne_preparation:
+                return observer.messages.get('plan') is not None and observer.messages['plan'].verified
+            message=observer.messages.get('preparation')
+            if not message:return False
+            metadata=json.loads(message.data)
+            if metadata['state']=='FAILED':raise RuntimeError('Airborne base verification failed: '+metadata['reason'])
+            return metadata['state']=='BASE_READY' and metadata['base_verified']
+        wait_for(prepared,100,'verified parameter profile and landing plan or airborne base mission')
         mission = observer.messages.get("mission")
         takeoff = [i for i, item in enumerate(mission.waypoints) if item.command == 22] if mission else []
         if len(takeoff) != 1:
@@ -162,18 +176,19 @@ def run(config, args):
         if not result.success:
             raise RuntimeError("Could not select TAKEOFF")
         wait_for(lambda: observer.messages["mission"].current_seq == takeoff[0], 8, "TAKEOFF selection")
-        result = call(Trigger, "/landing_supervisor/enable", Trigger.Request())
-        if not result.success:
-            raise RuntimeError("Supervisor enable refused: " + result.message)
-        wait_for(lambda: observer.messages.get("supervisor") is not None
-                 and observer.messages["supervisor"].monitoring_enabled, 5, "enabled supervisor")
+        if not airborne_preparation:
+            result = call(Trigger, "/landing_supervisor/enable", Trigger.Request())
+            if not result.success:
+                raise RuntimeError("Supervisor enable refused: " + result.message)
+            wait_for(lambda: observer.messages.get("supervisor") is not None
+                     and observer.messages["supervisor"].monitoring_enabled, 5, "enabled supervisor")
         flags = observer.flags()
         observer.spin(.2)
         plugin = plugin_status()
         def pre_arm_ready():
             snapshot = observer.snapshot(flags, plugin)
             snapshot.update(armed=True, mode="AUTO", native_takeoff_ok=True)
-            reasons = launch_blockers(snapshot, time.monotonic(), full_autoland=True)
+            reasons = launch_blockers(snapshot, time.monotonic(), full_autoland=True,airborne_preparation=airborne_preparation)
             from flight_checks import finite_json
             (directory / "pre_arm_checks.json").write_text(json.dumps(finite_json(
                 dict(snapshot=snapshot, blockers=reasons)), indent=2) + "\n")
@@ -196,7 +211,7 @@ def run(config, args):
         def pre_launch_ready():
             snapshot = observer.snapshot(flags, plugin)
             snapshot["native_takeoff_ok"] = native_ok
-            reasons = launch_blockers(snapshot, time.monotonic(), full_autoland=True)
+            reasons = launch_blockers(snapshot, time.monotonic(), full_autoland=True,airborne_preparation=airborne_preparation)
             from flight_checks import finite_json
             (directory / "pre_launch_checks.json").write_text(json.dumps(finite_json(
                 dict(snapshot=snapshot, blockers=reasons)), indent=2) + "\n")
@@ -211,11 +226,23 @@ def run(config, args):
         end = time.monotonic() + args.duration
         last_print = 0
         native_fallback_reported = False
+        airborne_supervisor_enabled=False
         while time.monotonic() < end:
             observer.spin(.2)
             managed_session(config)
             if app.poll() is not None:
                 raise RuntimeError("Application exited during flight; requesting RTL")
+            if airborne_preparation:
+                preparation=observer.messages.get('preparation')
+                metadata=json.loads(preparation.data) if preparation else {}
+                if metadata.get('state')=='FAILED':
+                    raise RuntimeError('Airborne mission preparation failed: '+metadata.get('reason',''))
+                if metadata.get('state')=='VERIFIED' and not airborne_supervisor_enabled:
+                    if not observer.messages.get('plan') or not observer.messages['plan'].verified:continue
+                    result=call(Trigger,'/landing_supervisor/enable',Trigger.Request())
+                    if not result.success:raise RuntimeError('Airborne supervisor enable refused: '+result.message)
+                    airborne_supervisor_enabled=True
+                    save_action('airborne_plan_verified',metadata)
             if time.monotonic() - last_print > 10:
                 last_print = time.monotonic()
                 m = observer.messages
@@ -233,7 +260,7 @@ def run(config, args):
                 outcome = "NATIVE_AUTO_DISARMED; net capture not established"
                 save_action("native_fcu_disarmed", "FCU disarmed after native LAND; no automatic capture claim")
                 break
-            if status and status.state in ("ABORT", "COMPLETE"):
+            if status and status.state in ("ABORT", "COMPLETE", "NET_CONTACT", "MISSED_NET", "TERMINAL_FAULT"):
                 outcome = status.state + ": " + status.reason
                 save_action("terminal_supervisor_state", status.state + ": " + status.reason)
                 observer.spin(5)
@@ -264,8 +291,14 @@ def run(config, args):
         # confirmed recovery. No blind force-disarm is permitted in flight.
         recovery_confirmed = False
         native_auto_preserved = False
+        terminal_hold_preserved = False
         try:
-            if state().armed and outcome.startswith("COMPLETE"):
+            if state().armed and TERMINAL_PHASES.intersection(observer.supervisor_states):
+                terminal_hold_preserved = app is not None and app.poll() is None
+                save_action("terminal_hold_preserved", terminal_hold_preserved)
+                # A late RTL here would undo the terminal-phase policy. Leave
+                # the application's zero-thrust hold and pilot override active.
+            elif state().armed and outcome.startswith("COMPLETE"):
                 save_action("capture_hold_preserved", "Application remains running; handle simulator disarming explicitly")
             elif (state().armed and not observer.guided_observed and not observer.vision_owner_observed
                   and preserve_native_fallback(outcome, state().mode, observer.supervisor_states)):
@@ -282,6 +315,8 @@ def run(config, args):
             # Signals can invalidate this process's ROS context. A new process
             # can still independently verify local SITL and confirm recovery.
             try:
+                if TERMINAL_PHASES.intersection(observer.supervisor_states):
+                    raise RuntimeError("Terminal phase observed; automatic late RTL suppressed")
                 recovery = subprocess.run(["bash", "tools/sim.sh", "recover"], cwd=ROOT,
                                           capture_output=True, text=True, timeout=25)
                 (directory / "recovery.log").write_text(recovery.stdout + recovery.stderr)
@@ -293,6 +328,7 @@ def run(config, args):
             outcome = "RECORDING_TIME_LIMIT"
         summary.update(catapult_requested=launched, recovery_confirmed=recovery_confirmed,
                        native_auto_preserved=native_auto_preserved,
+                       terminal_hold_preserved=terminal_hold_preserved,
                        experiment_outcome=outcome)
         (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         print("Experiment result:", json.dumps(summary, indent=2), "\nLogs:", directory, flush=True)
@@ -304,5 +340,17 @@ def run(config, args):
                 save_action("application_still_running", app.pid)
         log.close()
         observer.close()
+        from capture_diagnostics import preserve_native_logs
+        try:
+            before = json.loads((directory / 'native_log_inventory_before.json').read_text())
+            preserve_native_logs(directory, before)
+        except OSError as exc:
+            (directory / 'native_log_capture_error.txt').write_text(str(exc))
+        try:
+            from analyse_command_timing import analyse
+            report = analyse(directory)
+            (directory / 'command_timing_analysis.json').write_text(json.dumps(report, indent=2) + '\n')
+        except (OSError, ValueError) as exc:
+            (directory / 'timing_analysis_error.txt').write_text(str(exc))
     if not outcome.startswith("COMPLETE"):
         raise RuntimeError("Flight experiment did not achieve confirmed capture: " + outcome)

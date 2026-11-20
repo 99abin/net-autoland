@@ -61,9 +61,14 @@ def require_preflight():
 
     node.create_subscription(FCUState, "/mavros/state", save, 10)
     try:
-        deadline = time.monotonic() + 4
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=.1)
+            if state is not None and state.connected and time.monotonic()-received<=3:
+                break
+        # Allow graph discovery after the first state sample as well.
+        settle=time.monotonic()+1
+        while time.monotonic()<settle:rclpy.spin_once(node,timeout_sec=.1)
         if (state is None or time.monotonic() - received > 3 or not state.connected
                 or state.armed or state.mode != "MANUAL"):
             raise RuntimeError("Start autoland only with fresh connected DISARMED MANUAL SITL")
@@ -197,7 +202,12 @@ def verify(config):
         raise RuntimeError("FCU did not confirm " + name)
 
     try:
-        spin(3)
+        deadline=time.monotonic()+15
+        while time.monotonic()<deadline:
+            spin(.1)
+            s=latest.get('state')
+            if s is not None and s.connected and time.monotonic()-received['state']<=3:break
+        spin(1)
         guard("MANUAL")
         names = [name for name, _ in node.get_node_names_and_namespaces()]
         if "fcu_interface" in names or node.count_publishers("/mavros/setpoint_raw/attitude") != 1:

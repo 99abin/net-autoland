@@ -32,7 +32,7 @@ class GuidanceConfig:
     def validate(self):
         if not finite(*self.__dict__.values()):
             raise ValueError("Non-finite guidance parameter")
-        if not 0 < self.minimum_airspeed_mps < self.target_airspeed_mps:
+        if not 0 <= self.minimum_airspeed_mps < self.target_airspeed_mps:
             raise ValueError("Invalid airspeed limits")
         if (
             min(

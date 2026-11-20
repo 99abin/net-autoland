@@ -1,5 +1,72 @@
 # Validation report
 
+## Native landing airspeed-priority repeat (2026-11-18)
+
+Changed the simulator-only profile from `TECS_LAND_SPDWGT=-1` to `2.0` using a
+backed-up, disarmed MANUAL parameter transaction and forced-pull readback. Only
+that native value was written; the 15 / 13.3 m/s targets, 50 m / 500 m approach,
+PID gains, ROS controller and handoff guards were preserved. Added bounded
+trial-loader coverage; all **152 Python tests passed**. Details and evidence
+are in [ARDUPILOT_PARAMETER_TUNING.md](ARDUPILOT_PARAMETER_TUNING.md).
+
+An agent-service restart interrupted the initial run shortly after takeoff.
+The detached repeat, `20261118-153218-8542`, reached the net in AUTO at 15.00 m/s
+but 10.61 m above its centre. No GUIDED/live ROS control or net contact occurred.
+Native auto-disarm was recorded after the aircraft stopped on the ground about
+103 m beyond the net. Gazebo GUI exit then shut down SITL; the observer reported
+simulator-disconnected and did not receive the final disarmed ROS state. The
+speed comparison is recorded; net capture and a validated landing are not
+established. Test ROS nodes were cleaned up after simulator shutdown.
+
+## Terminal commitment and contact experiment (2026-11-17)
+
+Implemented the explicit simulator terminal phase described in
+[TERMINAL_GUIDANCE.md](TERMINAL_GUIDANCE.md): predicted-crossing/uncertainty
+commitment gates, a regularized guidance horizon, bounded terminal bank, thrust
+ramp toward zero, phase-aware fault/missed-plane holds and blue-panel contact
+sensing. Normal launch flags remain false. The test runner preserves terminal
+hold rather than undoing it with cleanup RTL. No source aircraft/world file,
+original spawn, mission geometry or early-handoff threshold was changed.
+
+All **151 Python tests passed**. Added checks cover rejected/stable commitment,
+the decision boundary, finite bounded close-range commands, throttle authority,
+immediate zero-thrust terminal watchdog response, pilot override, collision
+identity and rejecting ground-level capture confirmation. All four ROS packages
+built with system Python, and all seven expected executables were discovered.
+The disarmed SITL attitude contract passed. A temporary non-aircraft probe
+verified the real Gazebo → ROS contact bridge, then was removed before takeoff.
+Harmonic's scoped contact topic was required; its short `<topic>` setting did
+not supply data on the originally configured bridge topic.
+
+Actual flight `20261117-220700-22801` completed takeoff and the saved mission,
+entered GUIDED with vision ownership, committed at simulator time 196.703 s,
+and observed blue-panel/fuselage contact at 198.434 s. The supervisor reported
+NET_CONTACT at 198.453 s. The recorder saw 38 valid estimates, 83 live attitude
+messages, 8 held-target previews, 3 valid close-range terminal previews and 69
+zero-thrust messages. Its last close-range preview was valid at 1.553 m forward
+range and 0.0794 s time to target. No ABORT, TERMINAL_FAULT, MISSED_NET or RTL
+was observed. Largest recorded FCU-state gap was 0.800 s, below the unchanged
+3 s watchdog. The runner preserved the running terminal hold and returned a
+nonzero result because capture was not confirmed.
+
+Physical result: the fuselage contacted the rigid panel near x=-0.006 m,
+y=-49.985 m, z=1.760 m, then fell inverted to ground level (final body z=0.09 m).
+No net restraint or successful capture was demonstrated. Last preimpact airspeed
+was 19.56 m/s despite the configured 15 m/s approach and 13.3 m/s preflare/custom
+targets; deceleration remains unresolved. The FCU DataFlash log confirms GUIDED
+without a subsequent RTL and both motor channels (3 and 7) at their 1100 PWM
+minimum after the zero-thrust demand. Zero thrust is not instantaneous propeller
+stoppage or a validated impact policy.
+
+Evidence: `.simulation/flight_runs/20261117-220700-22801/` (telemetry, contacts,
+configuration, actions and summary), `.simulation/contact_bridge_check.json`,
+`.simulation/analysis/terminal_result.json`,
+`.simulation/analysis/terminal_motor_outputs.json`, and
+`.simulation/sitl/logs/00000014.BIN`. Gazebo, front camera and the armed simulated
+GUIDED zero-thrust hold were left running for inspection. No automatic disarm
+or operator capture confirmation was issued. These results do not establish
+flight readiness or a safe real-aircraft recovery policy.
+
 ## Centre-ray / vertical-plane / filtered-target implementation
 
 The runtime detector publishes a colour-region centre without requiring four
@@ -550,3 +617,427 @@ Not verified here:
 
 The ROS node tests use transport/message doubles. They are useful regression tests,
 not a substitute for the outstanding integration and flight-dynamics checks.
+
+## 2026-11-19: four-item airborne preparation, headless integration
+
+Implemented per-leg wind-projected original-route timing through END, verified
+FCU AIRSPEED_CRUISE with explicit ISA EAS-to-TAS conversion, tangent-circle
+Adjustment/Alignment placement and four independently read-back partial appends.
+Removed fixed planning/deadline indices and the mandatory staging/corridor
+position gate. No measured-alignment gate or flight-control retune was added.
+
+- 181 Python regression checks passed; all four ROS packages built with system
+  Python. All seven expected autoland/perception executables were discoverable.
+- Headless Gazebo camera, clock and MAVROS streams passed; the disarmed attitude
+  contract passed. No GUI, QGC or camera-viewer process was launched.
+- First run `20261119-092426-13803`: all four appends passed, then a false
+  profile-change invalidation caused ABORT and confirmed RTL. Recorded values
+  and profile ID remained unchanged. Added regression-tested handling for an
+  identical verified heartbeat arriving up to 50 ms ahead of its local clock:
+  retain the preceding strictly fresh lease without renewing it. Changed,
+  invalid, expired and future-dated profiles remain unacceptable. Cross-topic
+  clock ordering is a plausible explanation, not directly measured per-node.
+- Repeat `20261119-111555-17068`: original six-item prefix remained unchanged;
+  only new items 6,7,8,9 were transmitted by companion 1.192, commands
+  16,16,16,21. Four readbacks passed. Calm wind predicted APP distance 509.17 m,
+  alignment setback 228.83 m and 63.13 s remaining original-route budget before
+  the last append (minimum 30 s). Native TAKEOFF and original waypoints completed.
+- **Full landing failed:** while AUTO targeted item 6 (Adjustment), altitude
+  dropped from 51.85 m at sim time 134.792 s to 0.68 m at 143.074 s. Roll reached
+  approximately 139.5 degrees at 140.973 s. There was no GUIDED mode, vision
+  ownership or live ROS attitude output, and no LAND execution or net capture.
+  This identifies a native AUTO turn/airframe stability failure before the
+  landing approach; it does not establish whether tuning, dynamics or another
+  native flight constraint caused it. Ordinary L1 waypoints do not enforce the
+  reference circle, so geometric feasibility alone is insufficient validation.
+- The repeat was explicitly interrupted after the ground-level failure; its
+  harness reports INTERRUPTED and confirmed RTL telemetry. That mode confirmation
+  does not imply recovery from the impact. The managed simulator was then stopped.
+
+Artifacts: `.simulation/flight_runs/20261119-111555-17068/summary.json`,
+`adaptive_analysis.json`, telemetry, context snapshots and application log.
+Ground restoration preserved backups under `.simulation/mission_backups/` and
+removed only the previously generated staging fixture after matching its saved
+manifest. Physical capture, wind performance and native turn stability remain
+unvalidated; no flight-readiness claim is made.
+
+## 2026-11-19: native AUTOTUNE and same-route landing retry
+
+`tools/simulation_autotune.py --execute` implements an explicitly authorized,
+managed-local-SITL-only trial. It backs up rate gains/filters/time constants,
+verifies configured GCS identity and received RC input, uses native TAKEOFF and
+finite launch assist, then excites roll/pitch in AUTOTUNE. Envelope violations
+or stale telemetry stop excitation and request RTL. Reference exports and
+procedure are in `AUTOTUNE.md`.
+
+Several preliminary attempts exposed an empty parameter cache, unsupported
+MAVROS TAKEOFF mode name, an early takeoff turn, ignored RC overrides from the
+companion identity, and insufficient altitude for completion. These were not
+reported as successful tunes. The corrected trial uses a forced parameter pull,
+native mode 13 with heartbeat confirmation, the configured GCS identity with
+RC reception confirmation, and a long straight climb to 600 m.
+
+Completed run: `.simulation/flight_runs/20261119-115827-25668/`.
+Firmware reported `Roll: Finished` and `Pitch: Finished`; exit to RTL was
+confirmed. Persisted gains were checked after restart and a forced FCU pull.
+The original takeoff settings were restored before the landing retry.
+
+| Gain | Original | Learned |
+|---|---:|---:|
+| RLL_RATE_P | 0.08 | 0.3256968 |
+| RLL_RATE_I | 0.15 | 0.2109115 |
+| RLL_RATE_D | 0 | 0.01373462 |
+| RLL_RATE_FF | 0.345 | 0.2109115 |
+| PTCH_RATE_P | 0.08 | 0.6048656 |
+| PTCH_RATE_I | 0.60 | 0.6599450 |
+| PTCH_RATE_D | 0 | 0.02321999 |
+| PTCH_RATE_FF | 0.60 | 0.6599450 |
+
+AUTOTUNE also changed filters and attitude time constants (roll 0.8 s, pitch
+1.2 s). It was not an experiment varying just one PID coefficient.
+All gains/filters are exported in `simulation/autotune_gains.yaml`; the initial
+reference set is in `simulation/autotune_original_gains.yaml`. These remain
+simulator-specific candidates, not mathematically optimal or flight-proven.
+
+Same-route retry: `.simulation/flight_runs/20261119-120718-27384/`.
+The same six-item original mission and four appended items were verified.
+The aircraft passed the previously failing AUTO turn, visited indices 1 through
+9, and entered native LAND. The earlier inversion/ground-impact failure did not
+recur before the handoff. This supports control tuning as a contributor to that
+failure, but a single trial and combined gain/filter changes do not prove sole
+causation.
+
+The full landing still **failed**: supervisor entered HANDOFF_PENDING at sim
+255.001 s, when the controller preview became invalid with `Airspeed outside
+operating envelope`. Recorded airspeed was about 8.751 m/s, below the configured
+10 m/s minimum, at approximately 3.12 m above HOME. At 255.052 s the supervisor
+aborted with `Control target unavailable (including retained net target)`.
+Valid visual estimates were present immediately before this event; the specific
+observed blocker was controller airspeed readiness, not proven detection loss.
+No GUIDED telemetry, vision ownership, live ROS attitude messages or net capture
+were observed. RTL was confirmed; this does not establish a safe terminal
+recovery from low altitude. The simulator was stopped after recording results.
+
+183 regression tests passed, including RC frame identity/order/checksum and
+release validation. Landing behaviour and minimum-airspeed checks were not
+changed to force this trial through. Native speed/descent behaviour near
+handoff remains to be diagnosed. Native AUTOTUNE does not tune TECS.
+
+## 2026-11-19: zero ROS minimum airspeed, Gazebo/QGC experiment
+
+Requested experiment set only the ROS vision controller's minimum airspeed to
+0 m/s. The normal `src/start/config/control.yaml` retains 10 m/s. An explicit
+`simulation/settings.yaml` control_config points to
+`simulation/control_zero_minimum.yaml` for full simulated autoland launches.
+The guidance validator now allows an explicitly configured zero floor, while
+rejecting negative/nonfinite limits and limits at/above the target. ArduPilot
+AIRSPEED_MIN, learned gains and other control settings were unchanged.
+Runtime ROS parameter readback confirmed minimum_airspeed_mps = 0.0.
+
+All four ROS packages built and 185 regression checks passed. Gazebo and QGC
+were launched. Run `.simulation/flight_runs/20261119-183011-8895/` verified all
+four airborne appends and flew original/appended mission indices 1 through 9.
+It reached HANDOFF_PENDING near 4.9 m above HOME but aborted with
+`No matching fresh bounded preview command`, returned by the independent FCU
+interface. Recorded airspeed around that event was approximately 11 m/s, so
+this was not the previous below-10-m/s rejection. Valid preview messages were
+recorded nearby; the recorder does not establish the exact command/clock state
+inside the FCU interface at its ownership callback. The precise readiness
+failure therefore remains to be traced, rather than attributed to one cause.
+
+RTL was confirmed. No GUIDED telemetry, vision ownership, live ROS attitude
+messages or net contact were observed. Removing the airspeed floor did not
+produce a successful net landing. The application exited after the test;
+Gazebo/QGC and native SITL recovery were left running for the user to inspect.
+
+Set `control_config: null` in simulation/settings.yaml to return future full
+simulator launches to normal control configuration. This is a simulator-only
+experiment; normal tools/run.sh remains unchanged.
+
+## 2026-11-19: headless stall-onset and throttle characterization
+
+Two characterization flights completed with confirmed RTL and no GUI/QGC/camera
+windows. No landing app, mission edit or PID tuning occurred. Roll/pitch rate
+gains matched before/after. Temporary takeoff settings were restored and verified
+while disarmed; the final simulator session was stopped.
+
+Model-angle-based stall-onset proxy observations: 13.37 and 13.56 m/s, near level
+and wings-level before subsequent significant height loss. This supports an
+approximate 13.4–13.6 m/s region in this SITL configuration, not a certified or
+real-aircraft stall speed. Main-wing LiftDrag alpha_stall is 0.16 rad with
+alpha offset 0.065 rad; the estimate neglects wing pressure-centre angular
+velocity and telemetry alignment uncertainty.
+
+Refined accepted near-level points: 65% throttle → 14.79 m/s, 70% → 16.33 m/s,
+75% → 17.21 m/s, 80% → 20.63 m/s. The 62% segment was marginal/inconsistent
+between runs and is not included in the reliable refined map. Descending and
+unsettled points were rejected. These are measured mean segments, not an exact
+universal mapping or a choice of THR_MIN.
+
+See FLIGHT_PERFORMANCE.md. Run IDs: 20261119-184815-11677 and
+20261119-185506-12964. CSV, JSON and PNG exports are under
+`.simulation/analysis/characterization_20261119/`. All 187 regression tests passed.
+
+## 2026-11-19: autoland_1.plan and 15 m/s native approach/preflare
+
+Requested original plan `/home/abin/td/waypoints/autoland_1.plan` was imported
+while disarmed MANUAL, backed up and strictly verified. Actual FCU HOME and the
+original spawn were preserved; plannedHomePosition is not an instruction to
+relocate the aircraft. The plan contains one TAKEOFF and three waypoints at
+50 m. Ground import selects TAKEOFF item 1, so it intentionally does not
+preserve the active index of the replaced mission. The external plan is unedited.
+
+Added `sim.sh import-plan --file PATH --apply` for restricted SimpleItem
+WAYPOINT/TAKEOFF import. It normalizes numeric fields to ROS float types and
+QGC null waypoint yaw to ArduPlane's canonical stored zero. Complex items,
+unsupported frames/commands, fence/rally contents and invalid coordinates are
+rejected. Mission comparison tolerances are unchanged. Positionless TAKEOFF
+0,0 is skipped in original-route time prediction; it must not create a forecast
+leg to 0°,0°. Added regression coverage for this and the import.
+
+Native targets were applied with backup/readback: TECS_LAND_ARSPD=15 and
+LAND_PF_ARSPD=15. `simulation/fc_parameters.yaml` records those values. The
+provisional TAS profile in mission.yaml is now [15.45,15.45,15.45], giving a
+515 m calm-air approach for 33.333 s. Custom ROS target remains 13.3 m/s and
+its active experimental minimum remains 0 m/s. THR_MIN, LAND_OPTIONS, PID/FF,
+TECS landing weighting, landing reference and handoff conditions were unchanged.
+
+Run `.simulation/flight_runs/20261119-191511-17289/` with Gazebo and QGC open:
+
+- Four partial writes/readbacks succeeded at indices 5,6,7,8; original five-item
+  HOME/base prefix unchanged. Alignment setback 205.79 m, approach 515 m.
+- HANDOFF_PENDING at sim 299.457 s, recorded airspeed approximately 13.68 m/s.
+- VISION_FINAL at 299.609 s: actual GUIDED and vision ownership confirmed.
+- 45 live ROS attitude/thrust messages recorded; no net contact or terminal
+  commitment observed.
+- ABORT at 301.752 s: `Terminal commitment rejected before decision boundary`.
+  The latest valid preview had TTC 0.920 s, vertical crossing error 1.706 m,
+  lateral error 0.096 m and position standard deviations 0.75 m. Terminal-ready
+  was false. This is a later interception/commit-readiness failure, not a refusal
+  to enter GUIDED. Do not interpret a successful handoff as successful capture.
+- RTL telemetry confirmed; landing application cleaned up. GUI/QGC were left
+  running as requested. Mode confirmation alone does not establish safe recovery.
+
+Source plan copy, telemetry, context snapshots, adaptive_analysis.json and
+summary.json are in the run folder. Native target baseline is under
+`.simulation/parameter_trials/20261119-191353-17054/`; mission backups are under
+`.simulation/mission_backups/`. Four ROS packages built; 189 tests passed.
+This trial changed both the base route and preflare speed, so improvement in
+handoff cannot be attributed to either change in isolation.
+
+## 2026-11-19: unchanged new-plan GUI repeat
+
+Run `.simulation/flight_runs/20261119-195753-24562/` repeated autoland_1.plan
+with Gazebo and QGC open, native approach/preflare 15 m/s, custom target
+13.3 m/s and experimental ROS minimum 0. No guidance gains or limits changed.
+Base import/readback, all four appends and the disarmed contract check passed.
+
+GUIDED and vision ownership were observed, with 50 live messages. Net capture
+was not observed. The test aborted with `Terminal commitment rejected before
+decision boundary`; RTL telemetry was confirmed. The last valid GUIDED preview
+had TTC 0.939 s and body-up crossing error +1.462 m. No terminal commitment.
+
+Recorded response comparison (`guidance_response.csv` and PNG in run folder):
+first valid GUIDED sample requested pitch −0.95°, with measured native pitch
+approximately −1.09°, vertical velocity −1.32 m/s, height above configured net
+centre 4.33 m. Last valid GUIDED sample requested +2.27°, while measured native
+pitch was approximately −2.10°, vertical velocity −1.69 m/s, height above net
+centre 0.11 m and airspeed 14.31 m/s. GUIDED telemetry spanned about 2.52 s.
+These asynchronous telemetry samples show a demand/response discrepancy; they
+do not isolate whether controller dynamics, command acceptance, telemetry timing,
+or airframe response caused it. No PID change is justified from this comparison
+alone. Actual native pitch here is negative ROS FLU Euler pitch.
+
+The application cleaned up after confirmed recovery. Gazebo and QGC were left
+running as requested. No source/control change was made for the repeat.
+
+### Headless vertical gain trial
+
+Run `20261119-201116-26874` used simulator-only `vertical_gain: 1.4`, up from
+0.7, and the same base mission and 15 m/s native approach/preflare targets.
+All four appends, the disarmed attitude check and 189 tests passed. GUIDED
+ownership was confirmed and 51 live attitude messages were recorded.
+
+The last valid GUIDED preview predicted a +1.17 m body-up error at 0.90 s
+remaining. It requested +6.17° pitch, while measured native pitch was −1.16°
+and descent was 1.50 m/s. In the preceding 0.7-gain run, the corresponding
+samples were +1.46 m at 0.94 s, +2.27° requested, −2.10° measured, and 1.69 m/s
+descent. The two runs used different GUI load, and the samples were not taken
+at identical flight states, so the comparison does not isolate gain effects.
+
+The supervisor rejected terminal commitment at simulation time 216.356 s and
+RTL was confirmed. The independent Gazebo recorder logged fuselage-to-panel
+contact at 217.178 s, near the lower panel edge, after the abort. This was a
+collision after the abort, with no confirmed capture. See `guidance_response.csv`,
+`guidance_response.png`, `contacts.jsonl` and `summary.json` in the run folder.
+
+### Consolidated diagnostics from the existing gain trial
+
+The native DataFlash file 00000032.BIN was matched to run
+20261119-201116-26874 using its GUIDED/RTL transitions and the simulator clock.
+A preserved copy, SHA-256 manifest and native CSV exports are stored in that
+run's diagnostics folder. They include 5089 ATT samples, 5089 PIDP samples,
+servo PWM, normalized elevator, energy/navigation control, IMU/EKF, simulated
+state and 1386 parameter records. pitch_pipeline.csv joins ROS requests with
+preceding native samples within 0.1 s and records each sample's age. Raw ROS
+telemetry and native binary are retained for independent timing analysis.
+The existing native log already recorded the required pitch-control layers,
+so another flight was unnecessary for collecting them. Raw camera images were
+not recorded in that completed flight.
+
+Future full auto-test runs preserve changed native logs automatically alongside
+ROS recordings. Raw MAVLink capture includes attitude/servo/nav/RC messages,
+SET_ATTITUDE_TARGET and PID_TUNING when the firmware emits them. CameraInfo is
+also recorded. A logging regression test verifies changed-log selection, byte
+preservation and SHA-256 generation. 190 tests passed before the CameraInfo
+subscription addition. No control parameters changed during this collection.
+
+### Comprehensive headless diagnostic repeat
+
+Run `20261119-212129-35010` exercised the complete capture path. GUIDED and
+vision ownership were confirmed, with 51 live messages. Terminal commitment
+was rejected at roughly 0.91 s remaining and +1.16 m predicted body-up error.
+RTL telemetry was confirmed. The headless simulator was stopped and native log
+00000033.BIN finalized, preserved and decoded. The run folder includes all ROS
+records, native CSVs, raw binary, pitch_pipeline.csv/png and FINDINGS.md.
+
+At approximately 227.8 s, ROS requested +5.56° and native ATT recorded demand
++5.30° with measured pitch −1.17°. Native PIDP target was +2.51°/s and actual
++2.13°/s. Earlier measured pitch rate was still about −3°/s after takeover.
+Servo outputs near 1599 us were inside 1100–1900 us limits. Pitch TCONST was
+1.2 s and acceleration/input shaping was enabled. Thus transport/sign were
+confirmed, and the remaining angle discrepancy lies downstream of the accepted
+attitude demand. Shaping, rate dynamics and aircraft response contribute to
+observed delay. No single gain was proven to be the sole cause.
+
+Automatic end-of-run native snapshot preservation worked. The final stopped
+native log was then copied for complete offline analysis. Raw camera images
+were not recorded. No control parameter changes were made for this repeat.
+
+### Requested 0.2-second pitch time constant trial
+
+Run `20261119-223232-44789` applied PTCH2SRV_TCONST=0.2 with backed-up/read-back
+native parameters. The recorded previous value was 1.2000000477 s. Parameter
+metadata documents 0.4–1.0 s; the requested value is below that range. Installed
+runtime code accepts values above its 0.05 s floor. The simulator-only native
+trial allowlist now accepts 0.2–1.2 s, including restoration of the original
+AUTOTUNE result. The simulator profile records the new value. No PID gains
+were changed. ROS vertical_gain remained 1.4, custom target 13.3 m/s and its
+experimental minimum 0. Native approach/preflare targets remained 15 m/s.
+
+Gazebo was opened. Original mission import and all four airborne appends passed.
+GUIDED and ownership confirmed at 209.263 s. TERMINAL_COMMITTED at 210.951 s
+with predicted body-up error +0.115 m and TTC 1.836 s. NET_CONTACT at 212.803 s.
+No supervisor abort/fault was recorded. There were 113 live attitude messages
+and 68 zero-thrust messages. The application retained the terminal zero-thrust
+hold; capture remains unconfirmed and no automatic disarm was performed.
+
+Native log 00000034.BIN confirms PTCH2SRV_TCONST=0.200000003. Near 210.907 s,
+ROS requested +1.26°, native demand was +1.21° and measured pitch +1.02°.
+Compared with the preceding trial's large angle discrepancy, this demonstrates
+better tracking at this point in this run. Because changing the time constant
+also changes AUTO approach behaviour, the comparison does not isolate only
+post-handoff dynamics.
+
+Independent Gazebo contacts began at 212.776 s between the fuselage and blue
+panel, with sampled contact positions around z=1.21 m, versus panel centre
+z=1.35 m. This is simulator collision evidence near the centre, not confirmation
+of physical retention in a flexible net. The model uses a rigid panel. No RTL
+was requested after terminal commitment/contact. Gazebo and the terminal hold
+were left running for the user.
+
+The complete native snapshot and CSVs, ROS telemetry, contacts, configuration
+snapshots and pitch_pipeline.csv/png are in the run folder. All 191 tests passed.
+Baseline: `.simulation/parameter_trials/20261119-223158-44652/baseline.yaml`.
+## Headless wind handoff diagnostic repeat — 20 November 2026
+
+Run `.simulation/flight_runs/20261120-170434-7199` used the updated two-item
+QGC base plan, 4 m/s northward wind, and existing tuning/control overrides.
+All four airborne appends were verified and the original mission prefix was
+unchanged. Planned approach distance was 381.67 m; simulator-only remaining-route
+preparation minimum was 20 s (normal source configuration remains 30 s).
+
+The supervisor entered HANDOFF_PENDING at simulation time 180.904 s, confirmed
+VISION_FINAL at 181.003 s, committed at 183.655 s and reported NET_CONTACT at
+184.800 s. GUIDED was observed, with 118 live attitude messages and no recorded
+supervisor faults. Independent contact messages first identified
+`merlinv2::body::fuselage_collision` against the blue panel at 184.782 s, with
+contact points about 1.20–1.38 m above world ground. The latest airspeed and
+groundspeed samples before contact were 15.11 and 11.11 m/s. Zero thrust was
+commanded and the application retained terminal hold. Capture/retention is
+unconfirmed; no operator-confirmed COMPLETE was claimed.
+
+Only diagnostic logging and its test were added to the flight application for
+this repeat. The previous preview-command rejection did not recur, so a
+clock/order timing cause remains a hypothesis. Rejection logs now include the
+local command's stamp/receipt ages, validity, frame, plan ID, reason and bounds
+check. All four ROS packages built and 194 Python tests passed using
+`PYTHONPATH=tools /usr/bin/python3 -m unittest discover -s tests -q`.
+
+An earlier attempt, `20261120-165943-4948`, was interrupted by the tool server
+restart before handoff. Its partial recording and interruption note are retained;
+it is not counted as a landing outcome. The completed repeat used independently
+running simulator/recorder processes. Native log 00000039.BIN and the ROS/contact
+records are preserved with the completed run.
+
+## Tailwind repeat — 20 November 2026
+
+Run `20261120-171516-9420` changed only the configured wind from northward
+4 m/s to southward 4 m/s, retaining the headless setup, updated base plan,
+50 m waypoint heights, native tuning and control/handoff settings. All four
+appends passed, the original mission prefix stayed unchanged, and Approach
+was placed 648.33 m from LAND (headwind comparison: 381.67 m).
+
+The aircraft reached AUTO LAND and HANDOFF_PENDING at simulation time 244.704 s,
+then ABORT at 244.855 s. The diagnostic in `application.log` records a valid,
+bounded preview in `map` with matching plan ID. Its ROS stamp age was 0.054 s,
+but local wall-clock receipt age was 0.300481315 s, above the 0.2 s timeout.
+This identifies the rejecting wall-clock freshness check for this attempt;
+it does not establish the cause of the delivery/processing pause or prove the
+same cause for the earlier uninstrumented failure. No future stamp was present.
+
+GUIDED, vision ownership, live ROS attitude messages and net contact were not
+observed. RTL recovery was confirmed; the application stopped. No watchdog was
+relaxed and no gains were changed to force a pass. Two targeted wind tests
+passed. ROS telemetry, parsed rejection details, unchanged-prefix/partial-write
+analysis and native log 00000040.BIN are preserved in the run directory and its
+diagnostic archive. The headless simulator was left running in native RTL.
+
+## Instrumented tailwind repeat — 20 November 2026
+
+Added opt-in, asynchronous timing traces to the vision controller, FCU interface
+and supervisor. The local simulator auto-test enables them and generates
+`command_timing_analysis.json`; normal launch defaults and all flight checks,
+limits and tuning remain unchanged. Wire messages are unchanged. The installed
+Humble executor passes only messages to callbacks, so DDS timestamps are
+explicitly unavailable. Same-host/boot monotonic records join publication and
+reception, and include callback wall/CPU durations, independent clock/process
+heartbeats, scheduler counters and loss counts.
+
+Run `20261120-173823-13596` verified all four appends and the original prefix,
+confirmed GUIDED/vision ownership, reached terminal commitment and independent
+blue-panel/fuselage contact at simulation time 417.371 s. It recorded 94 live
+attitude messages and no supervisor faults. Latest pre-contact airspeed and
+groundspeed were 13.8003 and 17.8450 m/s. Zero thrust was commanded. Capture and
+retention were not confirmed. The completed simulation/application were stopped
+after recording; post_test_cleanup.json records that cleanup separately from
+the flight-end terminal-hold summary.
+
+At accepted handoff the local command receipt age was 0.010374304 s and ROS stamp
+age 0.012 s. Matching publication-to-reception-callback delay was 0.001497252 s.
+All three timing recorders reported zero dropped records. Before arming, a
+controller publication interval spanned 0.052 ROS seconds but 0.232469389 wall
+seconds, while nearby callbacks took at most 0.001144846 s. This demonstrates
+that slow simulation-clock progress can stretch normal ROS-timer publications
+past the wall-clock watchdog without a long controller calculation. The earlier
+0.300481315 s handoff failure was not reproduced, so its exact delivery or
+scheduling history cannot be reconstructed retroactively.
+
+All four packages built and 199 Python tests passed. A live, preview-only Humble
+smoke check confirmed the corrected message-only callback and timing output.
+Initial attempt `20261120-173544-12896` stopped before arming due to the new
+logger expecting unsupported message metadata; that integration was corrected
+and regression-tested before the completed flight. No launch pulse was consumed
+by the failed preflight attempt. Native log 00000041.BIN, raw node timing files,
+ROS/contact evidence, launch-time source snapshots and the timing analysis are
+retained in the completed run directory and diagnostic archive.

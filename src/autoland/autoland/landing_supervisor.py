@@ -16,14 +16,17 @@ from autoland_interfaces.msg import (
 )
 from autoland_interfaces.srv import SetControlOwnership
 from .geometry import finite, leg_position, wrap
-from .ros_util import params, retained, recent, stamped_recent, stamp_age, profile_values, run
+from .ros_util import params, retained, recent, stamped_recent, stamp_age, profile_values, reordered_profile_heartbeat, run
 from .state_conditions import HandoffConfig, Supervisor, handoff_ready, in_handoff_window
 from .terminal import TerminalConfig, TERMINAL_STATES, commit_ready, net_contact_pair
+from .timing_diagnostics import TimingRecorder
 
 
 class LandingSupervisor(Node):
     def __init__(self):
         super().__init__("landing_supervisor")
+        self.timing = TimingRecorder(self)
+        trace = self.timing.wrap
         self.p = params(
             self,
             dict(
@@ -66,15 +69,15 @@ class LandingSupervisor(Node):
         self.pub = self.create_publisher(LandingStatus, "/autoland/status", retained())
         self.client = self.create_client(SetControlOwnership, "/autoland/set_control_ownership")
         self.create_subscription(
-            ParameterProfileStatus, "/autoland/parameter_profile", self.profile_cb, retained()
+            ParameterProfileStatus, "/autoland/parameter_profile", trace("profile", self.profile_cb), retained()
         )
-        self.create_subscription(LandingPlan, "/autoland/landing_plan", self.plan_cb, retained())
-        self.create_subscription(String, "/autoland/control_ownership", self.owner_cb, 10)
+        self.create_subscription(LandingPlan, "/autoland/landing_plan", trace("plan", self.plan_cb), retained())
+        self.create_subscription(String, "/autoland/control_ownership", trace("owner", self.owner_cb), 10)
         self.create_subscription(
-            NetEstimate, "/autoland/net_estimate", lambda m: self.save("net", m), 10
+            NetEstimate, "/autoland/net_estimate", trace("net", lambda m: self.save("net", m)), 10
         )
         self.create_subscription(
-            ControlSetpoint, "/autoland/control_setpoint", lambda m: self.save("preview", m), 10
+            ControlSetpoint, "/autoland/control_setpoint", trace("preview", lambda m: self.save("preview", m)), 10
         )
         ns = self.p["mavros_namespace"].rstrip("/")
         for typ, topic, key, qos in [
@@ -82,23 +85,25 @@ class LandingSupervisor(Node):
             (NavSatFix, "/global_position/global", "gps", qos_profile_sensor_data),
             (TwistStamped, "/local_position/velocity_local", "velocity", qos_profile_sensor_data),
         ]:
-            self.create_subscription(typ, ns + topic, lambda m, k=key: self.save(k, m), qos)
+            self.create_subscription(typ, ns + topic, trace(key, lambda m, k=key: self.save(k, m)), qos)
         self.create_subscription(
-            Float64, ns + "/global_position/rel_alt", self.alt_cb, qos_profile_sensor_data
+            Float64, ns + "/global_position/rel_alt", trace("altitude", self.alt_cb), qos_profile_sensor_data
         )
         self.create_subscription(
-            WaypointList, ns + "/mission/waypoints", self.mission_cb, retained()
+            WaypointList, ns + "/mission/waypoints", trace("mission", self.mission_cb), retained()
         )
-        self.create_service(Trigger, "~/enable", self.enable_cb)
-        self.create_service(Trigger, "~/reset", self.reset_cb)
-        self.create_service(Trigger, "~/abort", self.abort_cb)
-        self.create_service(Trigger, "~/confirm_capture", self.capture_cb)
-        self.create_timer(0.05, self.tick)
+        self.create_service(Trigger, "~/enable", trace("enable", self.enable_cb))
+        self.create_service(Trigger, "~/reset", trace("reset", self.reset_cb))
+        self.create_service(Trigger, "~/abort", trace("abort", self.abort_cb))
+        self.create_service(Trigger, "~/confirm_capture", trace("capture", self.capture_cb))
+        self.create_timer(0.05, trace("tick", self.tick))
         if self.p["simulation_contact_enabled"]:
             from ros_gz_interfaces.msg import Contacts
-            self.create_subscription(Contacts, "/simulation/net_contacts", self.contact_cb, 10)
+            self.create_subscription(Contacts, "/simulation/net_contacts", trace("contact", self.contact_cb), 10)
 
     def profile_cb(self, msg):
+        if reordered_profile_heartbeat(self,msg,self.profile,self.profile_time):
+            return
         self.profile = msg
         self.profile_time = time.monotonic()
         values = profile_values(self, msg, self.profile_time)
@@ -182,6 +187,11 @@ class LandingSupervisor(Node):
             and math.hypot(self.velocity.twist.linear.x, self.velocity.twist.linear.y) < 1
         )
         res.success = self.engine.state in ("VISION_FINAL", "NET_CONTACT") and stopped
+        if self.p["terminal_enabled"]:
+            res.success = (res.success and self.engine.state == "NET_CONTACT" and self.net_contact
+                and self.plan is not None and self.alt is not None
+                and recent(self.times.get("alt"), 1)
+                and abs(self.alt - self.plan.land_alt) <= self.p["terminal_net_half_height_m"])
         if res.success:
             self.engine.state = "COMPLETE"
             self.engine.enabled = False
@@ -189,7 +199,7 @@ class LandingSupervisor(Node):
         res.message = (
             self.engine.reason
             if res.success
-            else "Need VISION_FINAL and fresh ground speed below 1 m/s"
+            else "Need stationary capture confirmation (terminal mode also requires net contact and target height)"
         )
         return res
 
@@ -215,6 +225,7 @@ class LandingSupervisor(Node):
         req = SetControlOwnership.Request()
         req.owner = owner
         req.plan_id = self.plan_locked or ""
+        self.timing.record("ownership_request_sent", owner=owner, plan_id=req.plan_id)
         self.future = self.client.call_async(req)
         if owner == "VISION":
             self.deadline = time.monotonic() + self.p["handoff_timeout_s"]
@@ -354,6 +365,7 @@ class LandingSupervisor(Node):
             failed = None
             try:
                 result = self.future.result()
+                self.timing.record("ownership_response", accepted=result.accepted, message=result.message)
                 if not result.accepted and self.engine.state == "HANDOFF_PENDING":
                     failed = result.message
             except Exception as exc:

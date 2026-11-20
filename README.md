@@ -26,6 +26,10 @@ not guess your serial device, MAVLink port, camera device, or simulator.
 For the local Merlin V2 / Gazebo landing world / QGroundControl setup and the
 configured 500 m southbound landing leg, see [simulation/README.md](simulation/README.md).
 For commands to copy terminal by terminal, see [simulation_command.md](simulation_command.md).
+For configurable reference duration and opt-in airborne integrated-wind approach
+planning with append-only writes, see [ADAPTIVE_APPROACH.md](ADAPTIVE_APPROACH.md).
+For the simulator's explicit close-range commitment, motor-off and contact
+policy, see [TERMINAL_GUIDANCE.md](TERMINAL_GUIDANCE.md). Contact is not capture.
 The full SITL experiment uses an explicit `autoland` command after a disarmed
 attitude-interface check; ordinary preview defaults stay disabled. It enables
 the existing early handoff and live simulated guidance without claiming capture.

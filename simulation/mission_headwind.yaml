@@ -1,0 +1,55 @@
+# SITL short-mission trial: 20-second original-route preparation margin.
+mission_manager:
+  ros__parameters:
+    # SITL ONLY: Merlin in zephyr_landing.sdf; do not use these GPS values on an aircraft.
+    configured: true
+    prepare_on_start: true
+    upload_enabled: false  # launch argument controls this when using the launch file.
+    mavros_namespace: /mavros
+    # Panel centre is Gazebo ENU (0, -50, 1.35), 50 m south of the origin.
+    # ArduPlane JSON origin: -35.363262, 149.165237, 584 m AMSL.
+    land_lat: -35.3637111
+    land_lon: 149.165237
+    # All mission altitudes are relative to the FCU HOME, frame 3.
+    # Net centre = 584.00 + 0.35 + 2.0/2 = 585.35 m AMSL.
+    # Measured disarmed SITL HOME = 584.09 m AMSL (aircraft body above ground).
+    # Relative-to-HOME target = 585.35 - 584.09 = 1.26 m.
+    # Recheck HOME after changing the world, spawn pose or SITL home settings.
+    land_alt: 1.26
+    # Fly SOUTH into the panel's +Y-facing front. Approach waypoint is NORTH of LAND.
+    approach_heading_deg: 180.0
+    approach_distance_m: 500.0
+    approach_alt: 50.0
+    transaction_timeout_s: 20.0
+    # Opt-in airborne append mode; normal launches remain preflight-only.
+    airborne_preparation_enabled: false
+    adaptive_corridor_reviewed: false
+    # Tune this from a measured test flight. 33.33 s is provisional, not validated.
+    t_reference_s: 33.3333333333
+    # Piecewise-linear TRUE airspeed versus fraction of reference approach time.
+    # TAS differs from FCU equivalent/indicated airspeed. Review these values.
+    airspeed_profile_time_fractions: [0.0, 0.8, 1.0]
+    airspeed_profile_tas_mps: [15.45, 15.45, 15.45]
+    approach_distance_min_m: 300.0
+    approach_distance_max_m: 900.0
+    max_planned_sink_mps: 3.0  # required average sink must be strictly below this
+    max_wind_mps: 10.0
+    min_predicted_groundspeed_mps: 3.0  # prediction must be strictly above this
+    wind_window_s: 8.0
+    wind_timeout_s: 2.0
+    wind_max_std_mps: 1.0
+    wind_min_samples: 20
+    minimum_planning_alt_m: 20.0
+    minimum_route_time_s: 20.0
+    # Remaining predicted travel time to the LAST ORIGINAL waypoint, checked
+    # again before every append. Independent of APP-to-LAND t_reference_s.
+    # Circle tangent at ALIGNMENT; ordinary L1 WPs do not enforce the arc.
+    turn_radius_m: 60.0
+    alignment_straight_time_s: 8.0
+    alignment_margin_m: 20.0
+    alignment_distance_min_m: 50.0
+    alignment_distance_max_m: 1000.0
+    append_timeout_s: 5.0
+    airborne_journal_path: ~/.ros/autoland_airborne_plan.json
+    mavlink_source_topic: /uas1/mavlink_source
+    mavlink_sink_topic: /uas1/mavlink_sink

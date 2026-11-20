@@ -1,5 +1,312 @@
 # Full autolanding experiment: Gazebo, ArduPlane SITL and QGC
 
+## Instrumented tailwind repeat — 20 November 2026
+
+Run `20261120-173823-13596` confirmed all four appends, GUIDED ownership,
+terminal commitment and fuselage contact with the blue panel in 4 m/s tailwind.
+ROS commanded zero thrust. Capture/retention remains unconfirmed. The completed
+headless simulator and retained ROS application were then stopped to close the
+logs and free resources. At contact, the latest recorded airspeed/groundspeed
+were 13.80 / 17.85 m/s.
+
+`auto-test` now automatically enables timing diagnostics for vision_controller,
+fcu_interface and landing_supervisor and saves them in each run's `timing/`
+directory. It also writes `command_timing_analysis.json`. No extra flags are
+needed, and normal launches keep diagnostics disabled. Commands are matched
+using their timestamp and contents without changing ROS message definitions.
+Logs include publication and reception, callback start/end and CPU duration,
+ownership requests/decisions, wall/ROS clocks, background heartbeats, scheduler
+counters and diagnostic drop counts. Disk writes run in background threads with
+bounded queues; stop a completed experiment to close its recording files.
+
+The successful handoff used a command received 10.37 ms earlier; matching
+publication-to-callback delay was 1.50 ms, with no diagnostic records dropped.
+The earlier 300 ms handoff rejection did not recur. Elsewhere before arming,
+a 52 ms ROS-time publication interval took 232 ms of wall time while nearby
+callbacks took at most 1.15 ms. This demonstrates slow simulation progress
+stretching publication intervals past the 200 ms wall watchdog; it does not
+prove the exact cause of the earlier unrecorded delay. Limits and control
+algorithms were not relaxed or retuned.
+
+This installed Humble executor does not expose DDS message-info timestamps to
+subscription callbacks. Those fields are marked unavailable; the report can
+measure the combined publication-to-callback delay and compare callback/process
+activity, but cannot separate every middleware-internal stage. Repeated identical
+command fingerprints, missing records and clock-comparison limits are documented
+in the report. To regenerate it after a test:
+
+```bash
+cd /home/abin/td/autoland1
+/usr/bin/python3 tools/analyse_command_timing.py .simulation/flight_runs/20261120-173823-13596
+```
+
+All four packages built, 199 Python tests passed, and a preview-only live Humble
+smoke check verified the logger's message-only callback. An initial diagnostic
+attempt (`20261120-173544-12896`) exposed and helped correct the metadata-callback
+compatibility error before arming; that preflight attempt is retained separately.
+Use the headless commands below to start a fresh test with the unchanged tailwind
+configuration and updated QGC base plan.
+
+## Current tailwind trial — 20 November 2026
+
+`simulation/settings.yaml` now sets `wind_enu_mps: [0.0, -4.0, 0.0]`:
+4 m/s toward south, behind the southbound landing approach. The updated QGC
+base mission, native tuning, controller settings and handoff checks were kept.
+The existing short-route profile `simulation/mission_headwind.yaml` is reused
+unchanged; despite its filename, it only provides mission settings and the
+20 s preparation margin, and does not define wind direction.
+
+Headless run `20261120-171516-9420` verified all four appends and the unchanged
+original mission. It planned a 648.33 m approach, compared with 381.67 m in the
+headwind run. The aircraft reached native AUTO LAND but aborted at handoff:
+the FCU's locally received preview was **0.30048 wall seconds old**, exceeding
+the **0.2 s** receipt timeout. Its simulation stamp age was only 0.054 s;
+validity, bounds, frame and plan ID all passed. The diagnostic proves which
+gate rejected this attempt, but does not identify why reception/processing
+paused. No GUIDED, live attitude output or net contact was observed; RTL was
+confirmed. The simulator remains running in RTL, with the landing app stopped.
+
+The headless commands below also apply to the tailwind configuration. Start a
+fresh simulator before repeating the one-use launch-assisted flight. Evidence:
+`.simulation/flight_runs/20261120-171516-9420/summary.json`,
+`handoff_rejection_analysis.json`, `application.log`, and `diagnostics/`.
+The targeted wind tests passed; no controller or watchdog limits were changed.
+
+## Headless wind diagnostic repeat — 20 November 2026
+
+Run `20261120-170434-7199` confirmed GUIDED ownership, terminal commitment and
+fuselage contact with the blue panel. The earlier `No matching fresh bounded
+preview command` rejection did not recur. The suspected clock/message-ordering
+cause remains unconfirmed. Only rejection diagnostics were added; handoff
+requirements, control gains and command limits were unchanged for this repeat.
+The app commanded zero thrust and retained its terminal hold. Net contact is
+not confirmation of capture or retention; the test deliberately reports that
+distinction instead of declaring a completed capture.
+
+That headwind run used a 4 m/s northward wind (headwind on the southbound approach),
+your updated `autoland_1.plan` with TAKEOFF and one ordinary waypoint, and a
+381.67 m wind-adjusted approach at 50 m. The simulator-only
+`simulation/mission_headwind.yaml` uses a 20 s remaining-route preparation
+minimum to accommodate this short base mission; the normal mission YAML keeps
+30 s. The simulator controller override still uses a 0 m/s minimum and
+13.3 m/s target; native approach/preflare targets remain 15 m/s and the pitch
+response time constant remains 0.2 s. These are the existing experimental settings.
+
+For a fresh, stopped simulator, Terminal 1:
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/build.sh
+bash tools/sim.sh start --headless --no-qgc --no-preview --launch-assist
+```
+
+Terminal 2, while disarmed in MANUAL:
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/sim.sh check --require-mavros
+bash tools/sim.sh import-plan --file /home/abin/td/waypoints/autoland_1.plan --apply
+bash tools/sim.sh verify-attitude
+# Continue only after PASS and MANUAL restored:
+bash tools/sim.sh auto-test --execute --airborne-preparation --duration 1200
+```
+
+No windows are opened. Do not run a second landing application concurrently.
+The latest test leaves the simulator and application running in zero-thrust
+terminal hold after contact; stop that completed experiment before a fresh run.
+Results are in `.simulation/flight_runs/20261120-170434-7199/summary.json`,
+`handoff_contact_analysis.json`, `contacts.jsonl`, and `diagnostics/`.
+If a future handoff is rejected, `application.log` now includes
+`Handoff preview rejection:` with the FCU interface's local command timestamp,
+receipt age, frame, plan ID, validity, reason and envelope check.
+
+## Current trial: autoland_1.plan, 15 m/s native approach/preflare
+
+Native TECS_LAND_ARSPD and LAND_PF_ARSPD are both 15 m/s. The custom ROS target
+remains 13.3 m/s and the active simulator minimum remains 0 m/s. THR_MIN,
+LAND_OPTIONS, tuned gains and TECS landing weighting were not changed.
+
+Terminal 1:
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/build.sh
+bash tools/sim.sh start --no-preview --launch-assist
+```
+
+This opens Gazebo and QGC. Leave the simulator running. In Terminal 2, with FCU
+disarmed MANUAL and no other landing app running:
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/sim.sh import-plan --file /home/abin/td/waypoints/autoland_1.plan --apply
+bash tools/sim.sh native-parameters --file simulation/15mps_approach_preflare_trial.yaml --apply
+bash tools/sim.sh native-parameters --file simulation/pitch_response_02_trial.yaml --apply
+bash tools/sim.sh verify-attitude
+```
+
+Only after the attitude check prints PASS:
+
+```bash
+bash tools/sim.sh auto-test --execute --airborne-preparation --duration 1200
+```
+
+The import backs up the existing mission and replaces it on the ground with
+one TAKEOFF and three ordinary waypoints from the file, preserving actual FCU
+HOME and aircraft spawn. It selects the new TAKEOFF while disarmed and verifies
+readback. QGC's planned HOME is not applied to the FCU; its cruiseSpeed field is
+planner metadata, not a MAV_CMD_DO_CHANGE_SPEED. Null waypoint yaw is normalized
+to ArduPlane's stored zero; mission comparison tolerances are unchanged.
+The imported TAKEOFF uses 0,0 as a current-position placeholder, so route-time
+prediction skips that placeholder rather than inventing a leg to 0°,0°.
+The airborne planner then appends Adjustment, Alignment, Approach and LAND.
+The nominal constant TAS profile is now 15.45 m/s for the provisional 33.333 s
+reference, predicting a 515 m calm-air approach. Actual duration is not guaranteed.
+Do not edit/upload a mission or parameters from QGC during the experiment.
+
+
+**Active simulator experiment:** the ROS minimum airspeed is 0 m/s through
+`simulation/control_zero_minimum.yaml`, selected by `control_config` in
+`simulation/settings.yaml`. Normal `tools/run.sh` retains 10 m/s. To restore
+normal simulated launches, set `control_config: null`. The GUI/QGC experiment
+reached HANDOFF_PENDING but aborted with `No matching fresh bounded preview
+command`; it did not achieve GUIDED ownership or capture. See VALIDATION.md.
+
+**Latest test:** native roll/pitch AUTOTUNE completed; the same-route retry
+passed the earlier AUTO turn failure and reached LAND, but aborted during
+HANDOFF_PENDING when airspeed fell below the ROS controller's 10 m/s minimum.
+No GUIDED ownership or net capture was observed. See [AUTOTUNE.md](AUTOTUNE.md)
+for gains, backups and the headless tuning procedure. The learned gains are
+currently persisted in this workspace's SITL state; external model files were
+not changed.
+
+## Headless full test with the four-waypoint airborne planner
+
+This mode adds **Adjustment → Alignment → Approach → LAND** during the original
+mission. It keeps the early vision-qualified handoff and existing terminal
+policy. No Gazebo, QGC or camera window is opened.
+
+Terminal 1 (leave it running):
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/build.sh
+bash tools/sim.sh start --headless --no-qgc --no-preview --launch-assist
+```
+
+Terminal 2, after startup:
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/sim.sh check --require-mavros
+bash tools/sim.sh adaptive-base --apply
+bash tools/sim.sh verify-attitude
+```
+
+Check that `verify-attitude` prints **PASS** and restores MANUAL. Then run:
+
+```bash
+bash tools/sim.sh auto-test --execute --airborne-preparation --duration 1200
+```
+
+This command explicitly permits simulated arming, AUTO, a finite catapult pulse,
+mission writes and live guidance in the managed local simulator. It waits for
+a verified FCU profile and original base mission before takeoff, then enables
+the supervisor only after all four airborne appends pass readback. Do not run
+another preview/app, QGC upload or mission edit concurrently.
+
+The base must contain HOME, one TAKEOFF and ordinary waypoints, with no LAND.
+For a fresh mission, upload that base using QGC before the headless test, close
+QGC and leave the FCU disarmed in MANUAL. The `adaptive-base` command backs up
+and reconciles only recognized previous appends; it does not create a missing
+base mission or add a staging point. It rejects unknown mission changes.
+
+Configure `t_reference_s`, `minimum_route_time_s`, `turn_radius_m`,
+`alignment_straight_time_s` and `alignment_margin_m` in
+`src/start/config/mission.yaml`; details are in [ADAPTIVE_APPROACH.md](ADAPTIVE_APPROACH.md).
+Adjustment, Alignment and Approach stay at 50 m above HOME. The reference
+circles help waypoint placement; ordinary L1 tracking does not enforce the arcs.
+
+To inspect status in a third terminal:
+
+```bash
+cd /home/abin/td/autoland1
+bash tools/sim.sh shell
+# The command above opens a new shell. At its bash prompt run:
+ros2 topic echo /autoland/airborne_preparation
+# Ctrl+C stops echo. Then optionally:
+ros2 topic echo /autoland/status
+```
+
+Read the printed final result and `.simulation/flight_runs/<run>/summary.json`.
+`VERIFIED` with `verified_appends: 4` confirms mission preparation; it does not
+mean the aircraft hit the net. Existing native tuning may still cause a height
+miss. Do not stop the simulator mid-flight to restart the experiment; allow the
+test to finish or confirm its recovery first. After the experiment:
+
+```bash
+bash tools/sim.sh stop
+```
+
+The ordinary static preflight workflow below remains available.
+
+**Current native landing trial:** `TECS_LAND_SPDWGT=2.0` gives airspeed maximum
+pitch priority throughout native LAND instead of the previous `-1` scaling.
+Approach remains 15 m/s, preflare/custom ROS target 13.3 m/s, approach distance
+500 m and waypoint height 50 m. This can flatten the descent and cause a height
+miss. The setting applies to native AUTO landing; ROS guidance remains unchanged
+after GUIDED takeover. The guarded trial saves the previous values in
+`.simulation/parameter_trials/<run>/baseline.yaml` for explicit restoration.
+
+**Airspeed-priority result, `20261118-153218-8542`:** the aircraft crossed the
+net plane in AUTO at **15.00 m/s**, **10.61 m above the net centre**. Over the
+last 100 m before the net, speed stayed between 14.999 and 15.004 m/s. It had
+35 valid visual estimates, but no valid controller preview coincided with the
+handoff height/time trigger. No GUIDED, live ROS commands or net contact occurred.
+Native flare was logged at 10.6 m above the landing reference near the net;
+the aircraft stopped on the ground about 103 m beyond it. The FCU log records
+native auto-disarm. The GUI then exited and the launcher shut down SITL; the
+observer returned a simulator-disconnected error rather than a clean landing
+result. This improved approach speed tracking but did not achieve net landing.
+See `.simulation/analysis/airspeed_priority_result.json` and
+`.simulation/analysis/airspeed_priority_comparison.png`.
+
+**Terminal-phase update:** full simulator runs now explicitly enable
+`terminal_enabled` and `simulation_contact_enabled`. Normal launches keep both
+disabled. After GUIDED ownership, the supervisor can enter `TERMINAL_COMMITTED`
+when the predicted crossing fits the opening/uncertainty limits for 0.15 s,
+with an accepted target no older than 0.25 s. Commitment must occur before the
+1 s decision boundary; otherwise recovery is requested before commitment.
+This is a prototype point-crossing check, not validated full-airframe clearance.
+
+After commitment, guidance uses a minimum 0.7 s calculation horizon, keeps bank
+within 5 degrees and retains pitch/slew limits. Reaching 2.5 m range or 0.2 s
+time to target alone no longer aborts the attempt. Thrust ramps toward zero.
+A terminal fault, missed target plane, or observed aircraft/net contact switches
+to a zero-thrust attitude hold instead of automatically requesting a late RTL.
+Pilot mode changes still release control. This is not a validated safe recovery.
+
+The contact sensor watches the blue panel, excluding ground and decorative
+figures. `NET_CONTACT` means contact, **not capture**. The panel is rigid; no net
+restraint/deformation model exists. `COMPLETE` still requires operator
+confirmation, fresh speed below 1 m/s, contact and target height. Ground impact
+alone cannot satisfy confirmation. The runner keeps the application running
+after terminal events while armed so its hold is not interrupted. It never
+automatically disarms or reports contact as capture success.
+
+**Latest terminal test, `20261117-220700-22801`:** takeoff and the mission
+completed, actual GUIDED/vision ownership was confirmed, and terminal commitment
+was followed by blue-panel/fuselage contact. The recorder saw 38 valid estimates,
+83 live attitude messages, 8 held-target previews and 3 valid close-range terminal
+previews. The last close preview remained valid at 1.55 m / 0.079 s with zero
+thrust. No supervisor fault or RTL occurred. Contact was near ENU
+`(-0.006, -49.985, 1.760)`; the aircraft then fell inverted to the ground.
+This is **contact, not successful capture**. Preimpact airspeed was about
+19.6 m/s, so the configured 15 / 13.3 m/s targets are not yet demonstrated at
+arrival. The runner intentionally returned nonzero because capture was not
+confirmed. Evidence: `.simulation/analysis/terminal_result.json`,
+`.simulation/analysis/terminal_motor_outputs.json` and the run's `contacts.jsonl`.
+
 **Perception update:** the current pipeline uses centre-pixel detection, a ray
 intersection with the surveyed vertical net plane, and a stationary-target
 Kalman filter. See [CENTER_RAY_ESTIMATION.md](CENTER_RAY_ESTIMATION.md) for
@@ -96,11 +403,10 @@ Terminal 1 and Terminal 2 running throughout the flight.
 
 This is a complete flight-sequence experiment, not a promise of net capture.
 The controller, aircraft dynamics and terminal interception are experimental.
-In particular, the existing controller rejects estimates below 2.5 m forward
-range or 0.2 s time to target; loss of valid commands invokes recovery (normally
-RTL). These limits are preserved. There is no automatic contact detection,
-net restraint model, impact motor cutoff, or validated close-range commitment
-policy. A real collision can occur without `COMPLETE`.
+Before commitment, the controller retains its 2.5 m / 0.2 s limits and ordinary
+recovery checks. After commitment, the terminal policy above applies. A real
+collision can occur without `COMPLETE`; net restraint and the terminal policy
+still require validation.
 
 ## Autonomous run (explicit simulator-only opt-in)
 
@@ -114,7 +420,7 @@ Terminal 1:
 ```bash
 cd /home/abin/td/autoland1
 bash tools/build.sh
-bash tools/sim.sh start --headless --no-qgc --no-preview --launch-assist
+bash tools/sim.sh start --no-preview --launch-assist
 ```
 
 Terminal 2, once startup has completed:
@@ -122,7 +428,7 @@ Terminal 2, once startup has completed:
 ```bash
 cd /home/abin/td/autoland1
 bash tools/sim.sh mission-altitude --altitude 50 --apply
-bash tools/sim.sh native-parameters --file simulation/approach_airspeed_parameter_trial.yaml --apply
+bash tools/sim.sh native-parameters --file simulation/airspeed_priority_parameter_trial.yaml --apply
 bash tools/sim.sh verify-attitude
 bash tools/sim.sh auto-test --execute --duration 900
 ```
@@ -133,8 +439,9 @@ It backs up the starting native parameters to the run directory, sets/rechecks
 the four reviewed simulator takeoff settings, starts the full application,
 waits for verified profile/mission, enables monitoring and applies all existing
 launch guards. It never force-arms or disables checks. It records the result
-and requests telemetry-confirmed RTL for faults, interruption or an unfinished
-handoff. Passing LAND without takeover no longer ends the run or requests RTL.
+and requests telemetry-confirmed RTL for faults or interruption before terminal
+commitment. After commitment it preserves the terminal hold, including when
+recording ends. Passing LAND without takeover does not request RTL.
 At the normal observation time limit, an aircraft still in uninterrupted native
 AUTO is left in AUTO and the application is stopped; the result explicitly says
 landing was not confirmed. A native FCU disarm after LAND is recorded separately
@@ -413,8 +720,9 @@ If vision is absent, weak, unstable or cannot produce a valid preview, AUTO
 continues. A later detection can permit takeover only while all handoff checks
 still pass, including the 8–80 m range and progress before LAND. A lost detection
 before takeover restarts the 0.5 s stability check. During the GUIDED request or
-after takeover, detection gaps use the retained net target; invalid commands
-still abort to RTL. The target is stored in local coordinates, not as a frozen
+after takeover, detection gaps use the retained net target. Invalid commands
+request RTL before commitment; after commitment they demand a zero-thrust hold.
+The target is stored in local coordinates, not as a frozen
 camera/body vector. Its relative position is recalculated as the aircraft moves.
 
 `target_hold_timeout_s` in `src/start/config/control.yaml` defaults to **0.0**:
@@ -422,7 +730,8 @@ no age expiry while the handoff/control remains active. A positive value limits
 both wall and ROS observation age. This assumes a stationary net and continuous
 local positioning; holding an erroneous observation does not correct it.
 The controller clears its target on plan change, inactive/reset state or clock
-rewind. This adds no close-range commitment, capture detection or motor cutoff.
+rewind. The separate terminal policy is described at the top of this guide and
+in [TERMINAL_GUIDANCE.md](TERMINAL_GUIDANCE.md).
 
 Inspect the current target mode with:
 
@@ -460,7 +769,10 @@ ros2 topic echo /autoland/control_setpoint
 Use Ctrl+C between displays. The expected successful handoff sequence is
 `MISSION_READY → AUTO_APPROACH → HANDOFF_PENDING → VISION_FINAL`, FCU
 `AUTO → GUIDED`, then ownership `VISION` and live simulated commands.
-A GUIDED service acknowledgement alone does not establish ownership.
+A GUIDED service acknowledgement alone does not establish ownership. A successful
+terminal gate then adds `TERMINAL_COMMITTED`. `NET_CONTACT` records physical
+contact only. `MISSED_NET` or `TERMINAL_FAULT` requires operator assessment;
+neither is a successful landing.
 
 To request recovery while the application remains running:
 
@@ -468,19 +780,23 @@ To request recovery while the application remains running:
 ros2 service call /landing_supervisor/abort std_srvs/srv/Trigger '{}'
 ```
 
-Confirm actual recovery mode in QGC/FCU telemetry (normally RTL). You can also
+Before commitment, confirm actual recovery mode in QGC/FCU telemetry (normally
+RTL). After commitment, this service requests the terminal zero-thrust hold;
+it does not request a late RTL. You can also
 select an appropriate recovery/pilot mode in QGC; a mode outside AUTO/GUIDED
 releases custom ownership. Do not use Ctrl+C on the landing program as an
 in-flight recovery command: that removes its ability to request recovery.
 
 An ABORT is a meaningful failed attempt, not a completed landing. Read `reason`.
 Check vision, track alignment, profile freshness and controller validity instead
-of removing their checks. The current minimum-range/time-to-target limits can
-cause close-range recovery before impact; this experiment does not add a new
-terminal-control or motor-cutoff policy.
+of removing their checks. Commitment rejection should occur before the decision
+boundary; the controller's original range/time limits remain before commitment.
+After commitment, inspect the terminal hold/contact result rather than expecting
+automatic RTL.
 
 Only after a physically stopped, captured aircraft is observed, manual capture
-confirmation is available (fresh ground speed must be below 1 m/s):
+confirmation is available (fresh ground speed below 1 m/s, observed net contact
+and height within the configured target opening):
 
 ```bash
 ros2 service call /landing_supervisor/confirm_capture std_srvs/srv/Trigger '{}'
@@ -539,3 +855,40 @@ preflight verification, not bypasses.
 For the native-AUTO-only comparison test, use
 [NATIVE_AUTO_FLIGHT_TEST.md](NATIVE_AUTO_FLIGHT_TEST.md). In that workflow use
 `preview --upload-mission` and omit `--full-autoland` from the launch helper.
+
+## Latest headless result (19 November 2026)
+
+Four airborne appends and original-prefix verification passed. The aircraft
+then lost stability in native AUTO while turning toward Adjustment and reached
+ground level before Alignment/Approach/LAND. No GUIDED handoff or live ROS
+attitude commands occurred. The full landing test therefore **failed**; see
+[VALIDATION.md](VALIDATION.md) for evidence and run IDs. The new geometry and
+reference-circle radius do not guarantee that L1 flies that circle or that the
+airframe handles the actual turn. Investigate native AUTO turn stability before
+treating this route as a working net-landing demonstration.
+
+## Headless throttle and low-speed characterization
+
+See [FLIGHT_PERFORMANCE.md](FLIGHT_PERFORMANCE.md) for commands, measurement
+conditions, backups and results. The measured model-angle-based stall-onset
+region was approximately 13.4–13.6 m/s; it is not a real-aircraft stall-speed
+measurement. The characterization procedure runs separately from landing and
+retains the current gains. It does not change landing airspeed targets or THR_MIN.
+
+### Result of the new-plan 15 m/s trial
+
+Run `20261119-191511-17289` completed all four appends, confirmed GUIDED and
+vision ownership, and sent 45 live ROS messages. It then aborted before terminal
+commitment: predicted vertical crossing error was about 1.71 m with TTC about
+0.92 s. No net capture occurred; RTL was confirmed. Gazebo and QGC were left
+open. Full evidence is in VALIDATION.md. The custom ROS target remains 13.3 m/s;
+this trial changed only the native approach/preflare targets and original route.
+
+### Current pitch-response trial result
+
+PTCH2SRV_TCONST is now 0.2 s in the simulator profile and persisted FCU state,
+from the requested 1.2 s baseline. This is below the documented 0.4 s lower
+bound. Run 20261119-223232-44789 confirmed GUIDED, terminal commitment and
+simulator NET_CONTACT near the panel centre. The application applied zero
+thrust and retained its terminal hold. Capture/retention remains unconfirmed.
+Full diagnostics and the backup reference are in VALIDATION.md.

@@ -38,7 +38,7 @@ def commit_ready(config, ttc, error_y, error_z, std_y, std_z, target_age):
     if not finite(ttc, error_y, error_z, std_y, std_z, target_age):
         return False
     margin = config.terminal_opening_margin_m
-    return (0 < ttc <= config.terminal_commit_ttc_s
+    return (config.terminal_decision_ttc_s < ttc <= config.terminal_commit_ttc_s
             and 0 <= target_age <= config.terminal_target_age_s
             and 0 <= max(std_y, std_z) <= config.terminal_max_position_std_m
             and min(std_y, std_z) >= 0

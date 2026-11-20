@@ -267,3 +267,23 @@ class GuidanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ZeroAirspeedExperimentTests(unittest.TestCase):
+    def test_zero_floor_is_explicitly_valid_but_negative_or_above_target_is_not(self):
+        from autoland.vision_guidance import GuidanceConfig
+        GuidanceConfig(minimum_airspeed_mps=0.).validate()
+        for value in (-1.,15.,float('nan')):
+            with self.assertRaises(ValueError):GuidanceConfig(minimum_airspeed_mps=value).validate()
+
+    def test_simulator_override_changes_only_the_requested_guidance_settings(self):
+        import yaml
+        root=Path(__file__).resolve().parents[1]
+        original=yaml.safe_load((root/'src/start/config/control.yaml').read_text())
+        experimental=yaml.safe_load((root/'simulation/control_zero_minimum.yaml').read_text())
+        params=experimental['vision_controller']['ros__parameters']
+        self.assertEqual(params['minimum_airspeed_mps'],0.)
+        params['minimum_airspeed_mps']=10.
+        self.assertEqual(params["vertical_gain"], 1.4)
+        params["vertical_gain"] = 0.7
+        self.assertEqual(experimental,original)

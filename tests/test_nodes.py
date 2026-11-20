@@ -191,6 +191,17 @@ class NodeTests(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertFalse(n.mode_client.calls)
 
+    def test_preview_diagnostic_identifies_future_stamp_without_accepting_it(self):
+        n = self.interface(True)
+        n.command.header.stamp.nanosec += 10000000
+        detail = n.preview_diagnostic("abc")
+        self.assertAlmostEqual(detail["stamp_age_s"], -0.01)
+        self.assertTrue(detail["valid"])
+        self.assertTrue(detail["envelope_ok"])
+        self.assertEqual(detail["command_plan_id"], "abc")
+        self.assertFalse(n.owner_cb(NS(owner="VISION", plan_id="abc"), NS()).accepted)
+        self.assertFalse(n.mode_client.calls)
+
     def test_recovery_does_not_override_manual_mode(self):
         n = self.interface(True)
         n.state_cb(self.state("MANUAL", True))

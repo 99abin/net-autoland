@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -72,6 +73,21 @@ def prepare(cfg, launch_assist=False):
                 if e.findtext("uri") == "model://zephyr_with_ardupilot"]
     if len(includes) != 1:
         raise ValueError("Expected exactly one Zephyr include in the landing world")
+    wind=cfg.get('wind_enu_mps',[0.,0.,0.])
+    if len(wind)!=3 or not all(type(v) in (int,float) and np.isfinite(v) for v in wind):
+        raise ValueError('wind_enu_mps requires three finite numbers')
+    wind_element=world.find('wind')
+    if wind_element is None:wind_element=ET.SubElement(world,'wind')
+    velocity=wind_element.find('linear_velocity')
+    if velocity is None:velocity=ET.SubElement(wind_element,'linear_velocity')
+    velocity.text=' '.join(str(v) for v in wind)
+    if any(wind):
+        model=STATE/'models/merlinv2'
+        shutil.copytree(aircraft/'models/merlinv2',model,dirs_exist_ok=True)
+        model_tree=ET.parse(model/'model.sdf')
+        plugin=model_tree.getroot().find("model/plugin[@name='ArduPilotPlugin']")
+        plugin.find('fdm_port_in').text='9003'
+        model_tree.write(model/'model.sdf',encoding='utf-8',xml_declaration=True)
     original = ET.parse(aircraft / "merlinv2_world.sdf").find("world")
     spawn = next(e for e in original.findall("include")
                  if e.findtext("uri") == "model://merlinv2")
@@ -85,6 +101,18 @@ def prepare(cfg, launch_assist=False):
         p = ET.SubElement(world, "plugin", filename="gz-sim-sensors-system",
                           name="gz::sim::systems::Sensors")
         ET.SubElement(p, "render_engine").text = "ogre2"
+    if not any(p.get("name") == "gz::sim::systems::Contact" for p in world.findall("plugin")):
+        ET.SubElement(world, "plugin", filename="gz-sim-contact-system", name="gz::sim::systems::Contact")
+    panel = world.find("model[@name='among_us_landing_panel']")
+    if panel is not None:
+        link = panel.find("link[@name='assembly']")
+        if link is not None and link.find("sensor[@name='net_contact']") is None:
+            sensor = ET.SubElement(link, "sensor", name="net_contact", type="contact")
+            ET.SubElement(sensor, "always_on").text = "true"
+            ET.SubElement(sensor, "update_rate").text = "100"
+            ET.SubElement(sensor, "topic").text = "/simulation/net_contacts"
+            contact = ET.SubElement(sensor, "contact")
+            ET.SubElement(contact, "collision").text = "blue_panel_collision"
     if launch_assist:
         from flight_checks import validate_assist_config
         assist = yaml.safe_load((ROOT / "simulation/launch_assist.yaml").read_text())
@@ -128,7 +156,7 @@ def prepare(cfg, launch_assist=False):
                     net_world_enu=[0, -50, 1.35],
                     net_lat=net_lat, net_lon=origin_lon,
                     approach_heading_deg=180., approach_distance_m=500.,
-                    launch_assist=launch_assist)
+                    launch_assist=launch_assist,wind_enu_mps=wind)
     (STATE / "geometry.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return metadata
 
@@ -138,7 +166,7 @@ def environment(cfg):
     env.update(ROS_DOMAIN_ID=str(cfg["ros_domain_id"]), ROS_LOCALHOST_ONLY="1",
                GZ_PARTITION=cfg["gazebo_partition"], GZ_IP="127.0.0.1",
                ROS_LOG_DIR=str(STATE / "ros_logs"))
-    env["GZ_SIM_RESOURCE_PATH"] = os.pathsep.join([
+    env["GZ_SIM_RESOURCE_PATH"] = os.pathsep.join(([str(STATE / "models")] if any(cfg.get("wind_enu_mps",[])) else []) + [
         str(Path(cfg["aircraft_directory"]) / "models"),
         str(Path(cfg["source_world"]).parent / "models"),
         str(Path(cfg["source_world"]).parent),
@@ -210,7 +238,7 @@ def ensure_no_existing_mavros(cfg):
         rclpy.shutdown()
 
 
-def preview(cfg, upload=False, full_autoland=False):
+def preview(cfg, upload=False, full_autoland=False, airborne_preparation=False):
     active = STATE / "active.json"
     record = json.loads(active.read_text()) if active.exists() else {}
     if "preview" in record.get("children", {}):
@@ -236,8 +264,22 @@ def preview(cfg, upload=False, full_autoland=False):
     if upload:
         command.append("upload_enabled:=true")
     if full_autoland:
+        if cfg.get('mission_config'):
+            mission=Path(cfg['mission_config']).expanduser()
+            if not mission.is_absolute():mission=ROOT/mission
+            if not mission.is_file():raise RuntimeError('Missing simulator mission configuration: '+str(mission))
+            command.append(f'mission_config:={mission}')
+        if cfg.get('control_config'):
+            control=Path(cfg['control_config']).expanduser()
+            if not control.is_absolute():control=ROOT/control
+            if not control.is_file():raise RuntimeError('Missing simulator control configuration: '+str(control))
+            command.append(f'control_config:={control}')
         command.extend(["handoff_enabled:=true", "live_output:=true",
-                        "partial_attitude_verified:=true"])
+                        "partial_attitude_verified:=true", "terminal_enabled:=true",
+                        "simulation_contact_enabled:=true"])
+        if airborne_preparation:
+            command.extend(['airborne_preparation_enabled:=true','adaptive_corridor_reviewed:=true',
+                f'airborne_journal_path:={STATE / "adaptive_plan.json"}'])
         print("LOCAL SITL AUTOLAND: handoff and live simulated commands enabled. "
               "Enable the supervisor after mission verification; arm/select AUTO in QGC.", flush=True)
     os.execvpe(command[0], command, environment(cfg))
@@ -355,7 +397,7 @@ def start(cfg, args):
     geometry = prepare(cfg, launch_assist=args.launch_assist)
     # Refuse to reuse another simulator's local ports. Do not probe TCP by
     # connecting: a connection could consume the simulator's one MAVLink client.
-    for kind, port in ((socket.SOCK_DGRAM, 9002), (socket.SOCK_STREAM, 5762),
+    for kind, port in ((socket.SOCK_DGRAM, 9002), (socket.SOCK_DGRAM, 9003), (socket.SOCK_STREAM, 5762),
                        (socket.SOCK_STREAM, 5763)):
         with socket.socket(socket.AF_INET, kind) as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -387,6 +429,10 @@ def start(cfg, args):
         gz = ["/usr/bin/gz", "sim", "-s", "-r", "-v", "3", geometry["world"]]
         if args.headless:
             gz.append("--headless-rendering")
+        if any(geometry['wind_enu_mps']):
+            east,north,up=geometry['wind_enu_mps']
+            launch('wind_relay',['/usr/bin/python3','tools/simulation_wind.py',
+                '--east',str(east),'--north',str(north),'--up',str(up)])
         launch("gazebo", gz)
         launch("sitl", [cfg["ardupilot_binary"], "--model", "JSON", "--home", geometry["home"],
                         "--speedup", "1", "--defaults",
@@ -502,11 +548,18 @@ def main():
     mission = sub.add_parser("mission-altitude", help="Back up and edit local SITL waypoint heights while disarmed")
     mission.add_argument("--altitude", required=True, type=float, help="Metres above HOME; preserves HOME and LAND")
     mission.add_argument("--apply", action="store_true", help="Upload and verify; otherwise read-only")
+    base=sub.add_parser('adaptive-base',help='Back up the disarmed SITL mission and prepare the airborne test staging route')
+    base.add_argument('--apply',action='store_true')
+    base.set_defaults(adaptive_base=True)
+    plan=sub.add_parser('import-plan',help='Import a QGC simple waypoint plan into disarmed managed SITL')
+    plan.add_argument('--file',required=True)
+    plan.add_argument('--apply',action='store_true')
     app = sub.add_parser("preview")
     app.add_argument("--upload-mission", action="store_true",
                      help="Explicitly allow preflight append/upload/readback to localhost SITL")
     full = sub.add_parser("autoland", help="Enable full handoff/control in verified managed SITL")
     full.add_argument("--upload-mission", action="store_true")
+    full.add_argument('--airborne-preparation',action='store_true')
     sub.add_parser("verify-attitude", help="Disarmed local SITL GUIDED attitude interface test")
     sub.add_parser("recover", help="Confirm RTL in the managed local SITL; never overrides pilot modes")
     parameters = sub.add_parser("native-parameters", aliases=["native-pitch"],
@@ -518,6 +571,7 @@ def main():
                       help="Allow reviewed takeoff parameter writes, arming, AUTO and one simulated launch")
     auto.add_argument("--duration", type=float, default=900,
                       help="Maximum wall-clock recording time after launch")
+    auto.add_argument('--airborne-preparation',action='store_true',help='Opt in to airborne integrated-wind mission appends')
     observer = sub.add_parser("check")
     observer.add_argument("--timeout", type=float, default=8)
     observer.add_argument("--require-mavros", action="store_true")
@@ -554,12 +608,13 @@ def main():
     elif args.command == "status":
         p = STATE / "active.json"
         print(p.read_text() if p.exists() else "No managed simulation session is recorded")
-    elif args.command == "mission-altitude":
+    elif args.command in ("mission-altitude","adaptive-base","import-plan"):
         from simulation_mission import run
         os.environ.update(environment(cfg))
         run(cfg, args)
     elif args.command in ("preview", "autoland"):
-        preview(cfg, args.upload_mission, full_autoland=args.command == "autoland")
+        preview(cfg, args.upload_mission, full_autoland=args.command == "autoland",
+                airborne_preparation=getattr(args,'airborne_preparation',False))
     elif args.command == "verify-attitude":
         from simulation_contract import verify
         os.environ.update(environment(cfg))

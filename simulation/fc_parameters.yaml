@@ -1,7 +1,7 @@
 # SITL ONLY: apply requested approach/preflare targets; preserve other values.
 schema_version: 1
 configured: true
-description: Merlin Gazebo SITL - 15 m/s approach and 13.3 m/s preflare
+description: Merlin Gazebo SITL - 15 m/s approach and preflare
 parameters:
   LAND_TYPE: 0
   LAND_FLARE_ALT: null
@@ -9,6 +9,11 @@ parameters:
   LAND_FLARE_AIM: null
   LAND_PF_ALT: null
   LAND_PF_SEC: null
-  # Model README: nominal stall 11.3 m/s at 5 kg (analytical estimate).
-  LAND_PF_ARSPD: 13.3
+  # SITL trial: both native targets above the measured onset region.
+  LAND_PF_ARSPD: 15.0
   TECS_LAND_ARSPD: 15.0
+  # Simulator comparison: prioritize airspeed with pitch throughout native LAND.
+  TECS_LAND_SPDWGT: 2.0
+
+  # Requested SITL response trial, below the documented 0.4 s lower bound.
+  PTCH2SRV_TCONST: 0.2

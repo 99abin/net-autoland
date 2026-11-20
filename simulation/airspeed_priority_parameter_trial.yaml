@@ -1,0 +1,6 @@
+simulator_only: true
+description: Merlin landing airspeed-priority comparison; retain 15/13.3 m/s targets
+parameters:
+  TECS_LAND_SPDWGT: 2.0
+  TECS_LAND_ARSPD: 15.0
+  LAND_PF_ARSPD: 13.3

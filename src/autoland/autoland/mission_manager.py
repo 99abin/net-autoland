@@ -7,7 +7,8 @@ from mavros_msgs.srv import WaypointPull, WaypointPush
 from std_srvs.srv import Trigger
 from autoland_interfaces.msg import LandingPlan, ParameterProfileStatus
 from .mission_builder import LandingConfig, extend_mission, fingerprint, same_mission
-from .ros_util import params, retained, recent, profile_values, run
+from .ros_util import params, retained, recent, profile_values, reordered_profile_heartbeat, run
+from .adaptive_approach import AdaptiveConfig
 
 
 class MissionManager(Node):
@@ -27,6 +28,12 @@ class MissionManager(Node):
                 approach_alt=40.0,
                 transaction_timeout_s=15.0,
                 mavros_namespace="/mavros",
+                airborne_preparation_enabled=False,
+                adaptive_corridor_reviewed=False,
+                airborne_journal_path='~/.ros/autoland_airborne_plan.json',
+                mavlink_source_topic='/uas1/mavlink_source',
+                mavlink_sink_topic='/uas1/mavlink_sink',
+                **AdaptiveConfig().__dict__,
             ),
         )
         ns = self.p["mavros_namespace"].rstrip("/")
@@ -53,10 +60,19 @@ class MissionManager(Node):
         self.plan = None
         self.last_heartbeat = 0.0
         self.auto_pending = self.p["prepare_on_start"]
+        self.adaptive = None
+        if self.p['airborne_preparation_enabled']:
+            from .airborne_preparation import AirbornePreparation
+            if not self.p['adaptive_corridor_reviewed']:
+                raise ValueError('Airborne preparation requires a reviewed approach/alignment corridor')
+            self.adaptive=AirbornePreparation(self)
+            self.auto_pending=False
         self.create_timer(0.1, self.tick)
         self.invalidate("Waiting for configured landing and FCU")
 
     def profile_cb(self, msg):
+        if reordered_profile_heartbeat(self,msg,self.profile,self.profile_time):
+            return
         self.profile = msg
         self.profile_time = time.monotonic()
         if (
@@ -79,6 +95,8 @@ class MissionManager(Node):
     def list_cb(self, msg):
         self.items = list(msg.waypoints)
         self.generation += 1
+        if self.adaptive is not None:
+            self.adaptive.current=msg.current_seq
         if (
             self.phase == "IDLE"
             and self.expected is not None
@@ -106,6 +124,10 @@ class MissionManager(Node):
         )
 
     def prepare_cb(self, req, res):
+        if self.adaptive is not None:
+            res.success=False
+            res.message='Airborne preparation is automatic after base verification; inspect /autoland/airborne_preparation'
+            return res
         if self.phase != "IDLE":
             res.success = False
             res.message = "Transaction already running"
@@ -159,6 +181,9 @@ class MissionManager(Node):
             self.plan.header.stamp = self.get_clock().now().to_msg()
             self.pub.publish(self.plan)
             self.last_heartbeat = time.monotonic()
+        if self.adaptive is not None:
+            self.adaptive.tick()
+            return
         if self.auto_pending and self.p["configured"] and self.safe_to_prepare():
             self.auto_pending = False
             self.begin()

@@ -47,7 +47,7 @@ def main():
     # HEARTBEAT is scheduled in FCU simulation time. At a low real-time factor
     # its default 1 Hz can exceed our 3 s wall watchdog. Request real FCU
     # heartbeats more frequently; never synthesize or renew stale state.
-    intervals = [(0, 100000.), (30, 50000.), (32, 50000.), (33, 100000.), (74, 100000.)]
+    intervals = [(0, 100000.), (30, 50000.), (32, 50000.), (33, 100000.), (74, 100000.), (168, 200000.), (42, 200000.)]
 
     def configure_rates():
         future = state["future"]

@@ -30,6 +30,7 @@
       - setpoint_raw
       - vfr_hud
       - nav_controller_output
+      - wind_estimation
 /**/time:
   ros__parameters:
     timesync_mode: NONE

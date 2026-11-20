@@ -1,6 +1,17 @@
 landing_supervisor:
   ros__parameters:
     handoff_enabled: false
+    terminal_enabled: false
+    simulation_contact_enabled: false
+    # Prototype centre-crossing gates, not certified full-airframe clearance.
+    terminal_commit_ttc_s: 2.0
+    terminal_decision_ttc_s: 1.0
+    terminal_commit_stable_s: 0.15
+    terminal_target_age_s: 0.25
+    terminal_max_position_std_m: 1.0
+    terminal_net_half_width_m: 2.75
+    terminal_net_half_height_m: 1.0
+    terminal_opening_margin_m: 0.1
     mavros_namespace: /mavros
     local_frame: map
     body_frame: base_link
@@ -19,6 +30,18 @@ landing_supervisor:
     max_net_range_m: 80.0
 vision_controller:
   ros__parameters:
+    terminal_enabled: false
+    # Keep these gates consistent with landing_supervisor above.
+    terminal_commit_ttc_s: 2.0
+    terminal_decision_ttc_s: 1.0
+    terminal_commit_stable_s: 0.15
+    terminal_target_age_s: 0.25
+    terminal_max_position_std_m: 1.0
+    terminal_net_half_width_m: 2.75
+    terminal_net_half_height_m: 1.0
+    terminal_opening_margin_m: 0.1
+    terminal_horizon_s: 0.7
+    terminal_roll_limit_deg: 5.0
     mavros_namespace: /mavros
     local_frame: map
     body_frame: base_link
@@ -55,6 +78,8 @@ vision_controller:
 fcu_interface:
   ros__parameters:
     live_output: false
+    terminal_enabled: false
+    terminal_roll_limit_deg: 5.0
     # ArduPlane uses an axis-selective quaternion interpretation that differs
     # from generic MAVLink. Set true only after verifying mask 132 in YOUR SITL.
     partial_attitude_verified: false

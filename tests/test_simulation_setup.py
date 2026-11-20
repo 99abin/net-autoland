@@ -55,7 +55,7 @@ class SimulationSetupTests(unittest.TestCase):
                 <longitude_deg>149.165237</longitude_deg><elevation>584</elevation>
                 <heading_deg>0</heading_deg></spherical_coordinates>
               <model name="among_us_landing_panel"><pose>0 -50 0 0 0 0</pose>
-                <link><visual><geometry><mesh><uri>triangle.obj</uri></mesh>
+                <link name="assembly"><visual><geometry><mesh><uri>triangle.obj</uri></mesh>
                 </geometry></visual></link></model></world></sdf>''')
             aircraft = root / "aircraft"
             aircraft.mkdir()
@@ -74,6 +74,8 @@ class SimulationSetupTests(unittest.TestCase):
             self.assertEqual(world.findtext("physics/real_time_factor"), "1")
             self.assertTrue(any(p.get("name") == "gz::sim::systems::Sensors"
                                 for p in world.findall("plugin")))
+            self.assertIsNotNone(world.find("plugin[@name='gz::sim::systems::Contact']"))
+            self.assertEqual(world.findtext("model/link/sensor/contact/collision"), "blue_panel_collision")
             self.assertEqual(geometry["net_lat"], -35.3637111)
             self.assertEqual(geometry["net_lon"], 149.165237)
             self.assertEqual(scene.read_bytes(), original_world)

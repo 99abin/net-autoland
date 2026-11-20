@@ -47,6 +47,19 @@ class FlightChecksTests(unittest.TestCase):
     def test_complete_operator_armed_auto_takeoff_is_authorized(self):
         self.assertEqual(checks.launch_blockers(self.snapshot(), 100), [])
 
+    def test_airborne_mode_requires_verified_base_and_explicit_recovery_flags(self):
+        s=self.snapshot()
+        s.update(live_output=True,handoff_enabled=True,partial_attitude_verified=True,
+            airborne_preparation_enabled=True,fcu_airborne_preparation_enabled=True,
+            preparation_state='BASE_READY',base_matches=True,base_profile_id='verified',
+            preparation_received=99.9,preparation_stamp_age_s=.1,
+            plan_verified=False,mission_matches=False,supervisor_state='WAITING',supervisor_enabled=False)
+        self.assertFalse(checks.launch_blockers(s,100,True,True))
+        for key,value in dict(base_matches=False,base_profile_id='other',preparation_received=90,
+            preparation_stamp_age_s=-1,airborne_preparation_enabled=False,
+            fcu_airborne_preparation_enabled=False,preparation_state='FAILED').items():
+            self.assertTrue(checks.launch_blockers({**s,key:value},100,True,True))
+
     def test_each_arming_mode_readiness_and_live_control_interlock(self):
         bad = dict(connected=False, armed=False, mode="GUIDED", current_command=16,
                    profile_verified=False, plan_verified=False, profile_id="",

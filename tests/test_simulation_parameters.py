@@ -9,6 +9,15 @@ from simulation_parameters import load_trial, validate_landing_target
 
 
 class PitchTrialTests(unittest.TestCase):
+    def test_landing_speed_priority_and_original_baseline_are_supported(self):
+        for value in (-1., 0., 1., 2.):
+            self.assertEqual(self.read(
+                f"simulator_only: true\nparameters: {{TECS_LAND_SPDWGT: {value}}}"),
+                {"TECS_LAND_SPDWGT": value})
+        for value in (-1.1, 2.1):
+            with self.assertRaises(ValueError):
+                self.read(f"simulator_only: true\nparameters: {{TECS_LAND_SPDWGT: {value}}}")
+
     def test_requested_preflare_speed_and_restore_respect_native_limits(self):
         current = dict(LAND_OPTIONS=2, TECS_LAND_ARSPD=23,
                        AIRSPEED_MIN=13, AIRSPEED_MAX=23, AIRSPEED_CRUISE=16)
@@ -31,6 +40,13 @@ class PitchTrialTests(unittest.TestCase):
             validate_landing_target(dict(TECS_LAND_ARSPD=24, LAND_OPTIONS=2), current)
         with self.assertRaisesRegex(ValueError, "other bits"):
             validate_landing_target(dict(LAND_OPTIONS=3), current)
+
+    def test_requested_pitch_time_constant_and_autotune_restore_are_supported(self):
+        for value in (0.2,1.2):
+            self.assertEqual(self.read(f"simulator_only: true\nparameters: {{PTCH2SRV_TCONST: {value}}}"),
+                             {'PTCH2SRV_TCONST':value})
+        with self.assertRaises(ValueError):
+            self.read("simulator_only: true\nparameters: {PTCH2SRV_TCONST: 0.19}")
 
     def read(self, text):
         with tempfile.TemporaryDirectory() as directory:
